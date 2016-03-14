@@ -204,7 +204,7 @@ def sparse_encode(X, dictionary, gram=None, cov=None, algorithm='lasso_lars',
     alpha: float, 1. by default
         If `algorithm='lasso_lars'` or `algorithm='lasso_cd'`, `alpha` is the
         penalty applied to the L1 norm.
-        If `algorithm='threshold'`, `alpha` is the absolute value of the
+        If `algorithm='threhold'`, `alpha` is the absolute value of the
         threshold below which coefficients will be squashed to zero.
         If `algorithm='omp'`, `alpha` is the tolerance parameter: the value of
         the reconstruction error targeted. In this case, it overrides
@@ -304,7 +304,7 @@ def sparse_encode(X, dictionary, gram=None, cov=None, algorithm='lasso_lars',
 
 
 def _update_dict(dictionary, Y, code, verbose=False, return_r2=False,
-                 random_state=None):
+                 random_state=None, inspektor=None, inspektor_params=None):
     """Update the dense dictionary factor in place.
 
     Parameters
@@ -346,6 +346,11 @@ def _update_dict(dictionary, Y, code, verbose=False, return_r2=False,
         # R <- 1.0 * U_k * V_k^T + R
         R = ger(1.0, dictionary[:, k], code[k, :], a=R, overwrite_a=True)
         dictionary[:, k] = np.dot(R, code[k, :].T)
+
+        if inspektor is not None:
+            dictionary[:, k] = inspektor(dictionary[:, k], locals(),
+                                         inspektor_params)
+
         # Scale k'th atom
         atom_norm_square = np.dot(dictionary[:, k], dictionary[:, k])
         if atom_norm_square < 1e-20:
@@ -360,7 +365,7 @@ def _update_dict(dictionary, Y, code, verbose=False, return_r2=False,
             dictionary[:, k] /= sqrt(np.dot(dictionary[:, k],
                                             dictionary[:, k]))
         else:
-            dictionary[:, k] /= sqrt(atom_norm_square)
+            dictionary[:, k] /= max(sqrt(atom_norm_square), 1.)
             # R <- -1.0 * U_k * V_k^T + R
             R = ger(-1.0, dictionary[:, k], code[k, :], a=R, overwrite_a=True)
     if return_r2:
@@ -551,7 +556,8 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
                          batch_size=3, verbose=False, shuffle=True, n_jobs=1,
                          method='lars', iter_offset=0, random_state=None,
                          return_inner_stats=False, inner_stats=None,
-                         return_n_iter=False):
+                         return_n_iter=False, inspektor=None,
+                         inspektor_params=None):
     """Solves a dictionary learning matrix factorization problem online.
 
     Finds the best dictionary and the corresponding sparse code for
@@ -738,8 +744,10 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
         B += np.dot(this_X.T, this_code.T)
 
         # Update dictionary
-        dictionary = _update_dict(dictionary, B, A, verbose=verbose,
-                                  random_state=random_state)
+        dictionary = _update_dict(
+            dictionary, B, A, verbose=verbose, random_state=random_state,
+            inspektor=inspektor, inspektor_params=inspektor_params)
+
         # XXX: Can the residuals be of any use?
 
         # Maybe we need a stopping criteria based on the amount of
