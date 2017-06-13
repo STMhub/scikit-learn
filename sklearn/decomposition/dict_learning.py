@@ -23,6 +23,8 @@ from ..utils.extmath import randomized_svd, row_norms
 from ..utils.validation import check_is_fitted
 from ..linear_model import Lasso, orthogonal_mp_gram, LassoLars, Lars
 
+from modl.decomposition.dict_fact_fast import _enet_regression_single_gram
+
 
 def _sparse_encode(X, dictionary, gram, cov=None, algorithm='lasso_lars',
                    regularization=None, copy_cov=True,
@@ -118,6 +120,14 @@ def _sparse_encode(X, dictionary, gram, cov=None, algorithm='lasso_lars',
             new_code = lasso_lars.coef_
         finally:
             np.seterr(**err_mgt)
+    elif algorithm == "enet":
+        alpha = float(regularization)  # / n_features  # account for scaling
+        cov = np.ascontiguousarray(cov.T)
+        n_samples, n_components = cov.shape
+        new_code = np.ndarray((n_samples, n_components), dtype=X.dtype)
+        _enet_regression_single_gram(gram, cov, X, new_code,
+                                     np.arange(len(X), dtype=int),
+                                     0., alpha, False, 1e-2, 100)
 
     elif algorithm == 'lasso_cd':
         alpha = float(regularization) / n_features  # account for scaling
@@ -321,23 +331,23 @@ def _project_l2(atom, copy=False):
 
 
 def _update_dict(dictionary, B, A, verbose=False, return_r2=False,
-                 random_state=None):
+                 bcd_n_iter=1, random_state=None, prox=None):
     """Update the dense dictionary factor in place. It does a pass of BCD
     to update by minimizing
 
-    .5 * ||Xt - DC||_F^2 = .5 * tr(DtDA) - 2 * tr(DtB) + tr(XXt),
+    .5 * ||Xt - VU||_F^2 = .5 * tr(VtVA) - 2 * tr(VTB) + tr(XXt),
 
-    as a function of the dictionary (D), where
+    as a function of the dictionary (V), where
 
-    B = XtCt, A = CCt, R = B - DA, C = matrix of codes
+    B = XtUt, A = UUt, R = B - VA, U = matrix of codes
 
     Note that the update of the kth atom is given by (see eqn 10 of
     ref paper below):
 
-    R = R + D[:, k]A[k, :]  # rank-1 update
-    D[:, k] = R[:, k] / A[k, k]  # = D[:, k] + R[k] / A[k, k]
-    D[:, k] = proj(D[:, k])  # eqn 10
-    R = R - D[:, k]A[k, :]  # rank-1 update
+    R = R + V[:, k]A[k, :]  # rank-1 update
+    V[:, k] = R[:, k] / A[k, k]  # = V[:, k] + R[k] / A[k, k]
+    V[:, k] = proj(V[:, k])  # eqn 10
+    R = R - V[:, k]A[k, :]  # rank-1 update
 
     Parameters
     ----------
@@ -383,24 +393,53 @@ def _update_dict(dictionary, B, A, verbose=False, return_r2=False,
     R += B
     R = np.asfortranarray(R)
     ger, = linalg.get_blas_funcs(('ger',), (dictionary, A))
-    for k in range(n_components):
-        # R <- 1.0 * U_k * V_k^T + R
-        R = ger(1.0, dictionary[:, k], A[k, :], a=R, overwrite_a=True)
-        # Scale k'th atom
-        if A[k, k] < 1e-20:
-            if verbose == 1:
-                sys.stdout.write("+")
-                sys.stdout.flush()
-            elif verbose:
-                print("Adding new random atom")
-            dictionary[:, k] = random_state.randn(n_features)
-            # Setting corresponding coefs to 0
-            A[k, :] = 0.
-        else:
-            dictionary[:, k] = R[:, k] / A[k, k]
-        dictionary[:, k] = _project_l2(dictionary[:, k])
-        # R <- -1.0 * U_k * V_k^T + R
-        R = ger(-1.0, dictionary[:, k], A[k, :], a=R, overwrite_a=True)
+
+    if bcd_n_iter > 1:
+        change = np.inf
+    for bcd_iter in range(bcd_n_iter):
+        if bcd_n_iter > 1:
+            old_dictionary = dictionary.copy()
+            if verbose:
+                print("[BCD] dict update iter %02i/%02" % (bcd_iter,
+                                                           bcd_n_iter))
+        order = random_state.permutation(n_components)
+        for idx, k in enumerate(order):
+            # R <- 1.0 * U_k * V_k^T + R
+            R = ger(1.0, dictionary[:, k], A[k, :], a=R, overwrite_a=True)
+            # Scale k'th atom
+            if A[k, k] < 1e-20:
+                if verbose == 1:
+                    sys.stdout.write("+")
+                    sys.stdout.flush()
+                elif verbose:
+                    print("Adding new random atom")
+                dictionary[:, k] = random_state.randn(n_features)
+                # Setting corresponding coefs to 0
+                A[k, :] = 0.
+            else:
+                dictionary[:, k] = R[:, k] / A[k, k]
+            if prox is None:
+                dictionary[:, k] = _project_l2(dictionary[:, k])
+            else:
+                wscale = 1. / A[k, k]
+                if verbose:
+                    print("Updating atom #%02i/%02i" % (idx + 1,
+                                                        n_components))
+                dictionary[:, k] = prox(
+                    dictionary[:, k], weight_scale=wscale, verbose=verbose)
+            # R <- -1.0 * U_k * V_k^T + R
+            R = ger(-1.0, dictionary[:, k], A[k, :], a=R, overwrite_a=True)
+
+        # check for convergence of the BCD
+        if bcd_n_iter > 1:
+            old = change = np.sum(old_dictionary ** 2)
+            if old == 0.:
+                old = 1.
+            change = np.sum((old_dictionary - dictionary) ** 2) / old
+            change = sqrt(change)
+            if change < 1e-2:
+                break
+
     if return_r2:
         R **= 2
         # R is fortran-ordered. For numpy version < 1.6, sum does not
@@ -416,7 +455,7 @@ def _update_dict(dictionary, B, A, verbose=False, return_r2=False,
 def dict_learning(X, n_components, alpha, max_iter=100, tol=1e-8,
                   method='lars', n_jobs=1, dict_init=None, code_init=None,
                   callback=None, verbose=False, random_state=None,
-                  return_n_iter=False):
+                  bcd_n_iter=1, return_n_iter=False, prox=None):
     """Solves a dictionary learning matrix factorization problem.
 
     Finds the best dictionary and the corresponding sparse code for
@@ -424,7 +463,7 @@ def dict_learning(X, n_components, alpha, max_iter=100, tol=1e-8,
 
         (U^*, V^*) = argmin 0.5 || X - U V ||_2^2 + alpha * || U ||_1
                      (U,V)
-                    with || V_k ||_2 = 1 for all  0 <= k < n_components
+                    with || V_k ||_2 <= 1 for all  0 <= k < n_components
 
     where V is the dictionary and U is the sparse code.
 
@@ -554,8 +593,8 @@ def dict_learning(X, n_components, alpha, max_iter=100, tol=1e-8,
         X, n_components=n_components, alpha=alpha, n_iter=max_iter,
         return_code=True, dict_init=dictionary, callback=_callback,
         batch_size=len(X), verbose=verbose, shuffle=False, n_jobs=n_jobs,
-        method=method, random_state=random_state,
-        return_n_iter=return_n_iter)
+        method=method, random_state=random_state, prox=prox,
+        bcd_n_iter=bcd_n_iter, return_n_iter=return_n_iter, offline=True)
     if return_n_iter:
         code, dictionary, n_iter = out
         return code, dictionary, errors, n_iter
@@ -564,12 +603,12 @@ def dict_learning(X, n_components, alpha, max_iter=100, tol=1e-8,
         return code, dictionary, errors
 
 
-def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
+def dict_learning_online(X, n_components=2, alpha=1, n_iter=100, bcd_n_iter=1,
                          return_code=True, dict_init=None, callback=None,
                          batch_size=3, verbose=False, shuffle=True, n_jobs=1,
                          method='lars', iter_offset=0, random_state=None,
                          return_inner_stats=False, inner_stats=None,
-                         return_n_iter=False):
+                         return_n_iter=False, offline=False, prox=None):
     """Solves a dictionary learning matrix factorization problem online.
 
     Finds the best dictionary and the corresponding sparse code for
@@ -687,11 +726,11 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
         n_components = n_features
     if batch_size is None:
         batch_size = n_samples
-    online = batch_size < n_samples
 
-    if method not in ('lars', 'cd'):
+    if method not in ('lars', 'cd', "enet"):
         raise ValueError('Coding method not supported as a fit algorithm.')
-    method = 'lasso_' + method
+    if method in ("lars", "cd"):
+        method = 'lasso_' + method
 
     t0 = time.time()
     # Avoid integer division problems
@@ -705,7 +744,7 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
     if dict_init is not None:
         dictionary = dict_init
     else:
-        if online:
+        if offline:
             code, S, dictionary = randomized_svd(X, n_components,
                                                  random_state=random_state)
         else:
@@ -761,7 +800,7 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
                                   alpha=alpha, n_jobs=n_jobs).T
 
         # Update the auxiliary variables
-        if online:
+        if not offline:
             if ii < batch_size - 1:
                 theta = float((ii + 1) * batch_size)
             else:
@@ -777,11 +816,11 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
 
         # Update dictionary
         dictionary = _update_dict(dictionary, B, A, verbose=verbose,
-                                  random_state=random_state,
-                                  return_r2=False)
+                                  random_state=random_state, prox=prox,
+                                  bcd_n_iter=bcd_n_iter)
 
         # Check convergence
-        if callback is not None and not callback(locals()):
+        if ii % 5 == 0 and callback is not None and not callback(locals()):
             break
 
     if return_inner_stats:
@@ -1069,7 +1108,7 @@ class DictionaryLearning(BaseEstimator, SparseCodingMixin):
                  fit_algorithm='lars', transform_algorithm='omp',
                  transform_n_nonzero_coefs=None, transform_alpha=None,
                  n_jobs=1, code_init=None, dict_init=None, verbose=False,
-                 split_sign=False, random_state=None):
+                 split_sign=False, bcd_n_iter=1, random_state=None, prox=None):
 
         self._set_sparse_coding_params(n_components, transform_algorithm,
                                        transform_n_nonzero_coefs,
@@ -1081,7 +1120,9 @@ class DictionaryLearning(BaseEstimator, SparseCodingMixin):
         self.code_init = code_init
         self.dict_init = dict_init
         self.verbose = verbose
+        self.bcd_n_iter = bcd_n_iter
         self.random_state = random_state
+        self.prox = prox
 
     def fit(self, X, y=None):
         """Fit the model from data in X.
@@ -1113,7 +1154,9 @@ class DictionaryLearning(BaseEstimator, SparseCodingMixin):
             dict_init=self.dict_init,
             verbose=self.verbose,
             random_state=random_state,
-            return_n_iter=True)
+            bcd_n_iter=self.bcd_n_iter,
+            return_n_iter=True,
+            prox=self.prox)
         self.components_ = U
         self.error_ = E
         return self
@@ -1238,7 +1281,8 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
                  fit_algorithm='lars', n_jobs=1, batch_size=3,
                  shuffle=True, dict_init=None, transform_algorithm='omp',
                  transform_n_nonzero_coefs=None, transform_alpha=None,
-                 verbose=False, split_sign=False, random_state=None):
+                 verbose=False, split_sign=False, random_state=None,
+                 bcd_n_iter=1, prox=None):
 
         self._set_sparse_coding_params(n_components, transform_algorithm,
                                        transform_n_nonzero_coefs,
@@ -1252,6 +1296,8 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
         self.batch_size = batch_size
         self.split_sign = split_sign
         self.random_state = random_state
+        self.bcd_n_iter = bcd_n_iter
+        self.prox = prox
 
     def fit(self, X, y=None):
         """Fit the model from data in X.
@@ -1278,7 +1324,8 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
             batch_size=self.batch_size, shuffle=self.shuffle,
             verbose=self.verbose, random_state=random_state,
             return_inner_stats=True,
-            return_n_iter=True)
+            return_n_iter=True,
+            prox=self.prox)
         self.components_ = U
         # Keep track of the state of the algorithm to be able to do
         # some online fitting (partial_fit)
@@ -1308,7 +1355,7 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
         """
         if not hasattr(self, 'random_state_'):
             self.random_state_ = check_random_state(self.random_state)
-        X = check_array(X)
+        # X = check_array(X)
         if hasattr(self, 'components_'):
             dict_init = self.components_
         else:
@@ -1323,7 +1370,8 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
             batch_size=len(X), shuffle=False,
             verbose=self.verbose, return_code=False,
             iter_offset=iter_offset, random_state=self.random_state_,
-            return_inner_stats=True, inner_stats=inner_stats)
+            return_inner_stats=True, inner_stats=inner_stats,
+            bcd_n_iter=self.bcd_n_iter, prox=self.prox)
         self.components_ = U
 
         # Keep track of the state of the algorithm to be able to do
