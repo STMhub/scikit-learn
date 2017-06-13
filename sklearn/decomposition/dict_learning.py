@@ -23,7 +23,7 @@ from ..utils.extmath import randomized_svd, row_norms
 from ..utils.validation import check_is_fitted
 from ..linear_model import Lasso, orthogonal_mp_gram, LassoLars, Lars
 
-from modl.decomposition.dict_fact_fast import _enet_regression_single_gram
+from ..externals.joblib._compat import _basestring
 
 
 def _sparse_encode(X, dictionary, gram, cov=None, algorithm='lasso_lars',
@@ -50,6 +50,8 @@ def _sparse_encode(X, dictionary, gram, cov=None, algorithm='lasso_lars',
         Precomputed covariance, dictionary * X'
 
     algorithm : {'lasso_lars', 'lasso_cd', 'lars', 'omp', 'threshold'}
+    or callable algorithm(X.copy(), gram.copy(), cov.copy(), regularization,
+                          verbose=verbose)
         lars: uses the least angle regression method (linear_model.lars_path)
         lasso_lars: uses Lars to compute the Lasso solution
         lasso_cd: uses the coordinate descent method to compute the
@@ -106,7 +108,10 @@ def _sparse_encode(X, dictionary, gram, cov=None, algorithm='lasso_lars',
         copy_cov = False
         cov = np.dot(dictionary, X.T)
 
-    if algorithm == 'lasso_lars':
+    if hasattr(algorithm, "__call__"):
+        new_code = algorithm(X, gram, cov, regularization, max_iter=max_iter,
+                             verbose=verbose)
+    elif algorithm == 'lasso_lars':
         alpha = float(regularization) / n_features  # account for scaling
         try:
             err_mgt = np.seterr(all='ignore')
@@ -120,15 +125,6 @@ def _sparse_encode(X, dictionary, gram, cov=None, algorithm='lasso_lars',
             new_code = lasso_lars.coef_
         finally:
             np.seterr(**err_mgt)
-    elif algorithm == "enet":
-        alpha = float(regularization)  # / n_features  # account for scaling
-        cov = np.ascontiguousarray(cov.T)
-        n_samples, n_components = cov.shape
-        new_code = np.ndarray((n_samples, n_components), dtype=X.dtype)
-        _enet_regression_single_gram(gram, cov, X, new_code,
-                                     np.arange(len(X), dtype=int),
-                                     0., alpha, False, 1e-2, 100)
-
     elif algorithm == 'lasso_cd':
         alpha = float(regularization) / n_features  # account for scaling
 
@@ -207,6 +203,8 @@ def sparse_encode(X, dictionary, gram=None, cov=None, algorithm='lasso_lars',
         Precomputed covariance, dictionary' * X
 
     algorithm : {'lasso_lars', 'lasso_cd', 'lars', 'omp', 'threshold'}
+    or callable algorithm(X, gram, cov, regularization,
+                          verbose=verbose)
         lars: uses the least angle regression method (linear_model.lars_path)
         lasso_lars: uses Lars to compute the Lasso solution
         lasso_cd: uses the coordinate descent method to compute the
@@ -330,8 +328,8 @@ def _project_l2(atom, copy=False):
     return atom
 
 
-def _update_dict(dictionary, B, A, verbose=False, return_r2=False,
-                 bcd_n_iter=1, random_state=None, prox=None):
+def _update_dict(dictionary, B, A, bcd_n_iter=1, n_samples=1,
+                 return_r2=False, random_state=None, verbose=False, prox=None):
     """Update the dense dictionary factor in place. It does a pass of BCD
     to update by minimizing
 
@@ -373,6 +371,17 @@ def _update_dict(dictionary, B, A, verbose=False, return_r2=False,
         If None, the random number generator is the RandomState instance used
         by `np.random`.
 
+    n_samples: int, optional (default=1)
+        Number of data points seen already by the overall DL algorithm.
+        This is useful for proximal-type updates of the dictionary.
+
+    bcd_n_iter : positive integer, optional (default 1)
+        Number of BCD iterations to run. Larger values may lead to better
+        results but at the detriment of speed.
+
+    prox : callable(locals()), optional (default=None)
+        Invoked to leverage the constraints on an updated dictionary atom.
+
     Returns
     -------
     dictionary : array of shape (n_features, n_components)
@@ -394,50 +403,56 @@ def _update_dict(dictionary, B, A, verbose=False, return_r2=False,
     R = np.asfortranarray(R)
     ger, = linalg.get_blas_funcs(('ger',), (dictionary, A))
 
-    if bcd_n_iter > 1:
-        change = np.inf
     for bcd_iter in range(bcd_n_iter):
         if bcd_n_iter > 1:
             old_dictionary = dictionary.copy()
-            if verbose:
-                print("[BCD] dict update iter %02i/%02" % (bcd_iter,
-                                                           bcd_n_iter))
         order = random_state.permutation(n_components)
         for idx, k in enumerate(order):
+            if verbose:
+                print("Updating atom #%02i/%02i" % (idx + 1,
+                                                    n_components))
+
             # R <- 1.0 * U_k * V_k^T + R
             R = ger(1.0, dictionary[:, k], A[k, :], a=R, overwrite_a=True)
-            # Scale k'th atom
+
+            # Update k'th atom
             if A[k, k] < 1e-20:
+                # We've run into numerical problems; reboot this atom
                 if verbose == 1:
                     sys.stdout.write("+")
                     sys.stdout.flush()
                 elif verbose:
                     print("Adding new random atom")
                 dictionary[:, k] = random_state.randn(n_features)
-                # Setting corresponding coefs to 0
+                dictionary[:, k] /= sqrt(np.dot(dictionary[:, k],
+                                                dictionary[:, k]))
                 A[k, :] = 0.
             else:
                 dictionary[:, k] = R[:, k] / A[k, k]
-            if prox is None:
-                dictionary[:, k] = _project_l2(dictionary[:, k])
-            else:
-                wscale = 1. / A[k, k]
-                if verbose:
-                    print("Updating atom #%02i/%02i" % (idx + 1,
-                                                        n_components))
-                dictionary[:, k] = prox(
-                    dictionary[:, k], weight_scale=wscale, verbose=verbose)
+                if prox is None:
+                    dictionary[:, k] = _project_l2(dictionary[:, k])
+                else:
+                    scale = n_samples / A[k, k]
+                    dictionary[:, k] = prox(
+                        dictionary[:, k], weight_scale=scale)
+
             # R <- -1.0 * U_k * V_k^T + R
             R = ger(-1.0, dictionary[:, k], A[k, :], a=R, overwrite_a=True)
 
         # check for convergence of the BCD
         if bcd_n_iter > 1:
-            old = change = np.sum(old_dictionary ** 2)
+            old = np.sum(old_dictionary ** 2)
             if old == 0.:
                 old = 1.
             change = np.sum((old_dictionary - dictionary) ** 2) / old
             change = sqrt(change)
-            if change < 1e-2:
+
+            if verbose:
+                print("[BCD] dict update iter %02i/%02i: change=%g" % (
+                    bcd_iter + 1, bcd_n_iter, change))
+
+            if change < .1:  # less than 10% change in norm
+                print("[BCD] converged.")
                 break
 
     if return_r2:
@@ -487,6 +502,8 @@ def dict_learning(X, n_components, alpha, max_iter=100, tol=1e-8,
         Tolerance for the stopping condition.
 
     method : {'lars', 'cd'}
+    or callable algorithm(X, gram, cov, regularization,
+                          verbose=verbose)
         lars: uses the least angle regression method to solve the lasso problem
         (linear_model.lars_path)
         cd: uses the coordinate descent method to compute the
@@ -502,8 +519,9 @@ def dict_learning(X, n_components, alpha, max_iter=100, tol=1e-8,
     code_init : array of shape (n_samples, n_components),
         Initial value for the sparse code for warm restart scenarios.
 
-    callback : optional (default=None)
-        Callable that gets invoked every five iterations.
+    callback :
+        Callable that gets invoked every five iterations. If it returns
+        non-True, then the main loop (iteration on data) is aborted.
 
     verbose :
         Degree of output the procedure will print.
@@ -516,6 +534,13 @@ def dict_learning(X, n_components, alpha, max_iter=100, tol=1e-8,
 
     return_n_iter : bool
         Whether or not to return the number of iterations.
+
+    bcd_n_iter : positive integer, optional (default 1)
+        Number of BCD iterations to run. Larger values may lead to better
+        results but at the detriment of speed.
+
+    prox : callable(locals()), optional (default=None)
+        Invoked to leverage the constraints on an updated dictionary atom.
 
     Returns
     -------
@@ -562,6 +587,8 @@ def dict_learning(X, n_components, alpha, max_iter=100, tol=1e-8,
     def _callback(env):
         """Callback for checking convergence.
         """
+        if callback is not None:
+            return callback(env)
         residuals = env["dictionary"].dot(env["this_code"])
         residuals -= env["this_X"].T
         residuals **= 2
@@ -668,6 +695,8 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100, bcd_n_iter=1,
         Number of parallel jobs to run, or -1 to autodetect.
 
     method : {'lars', 'cd'}
+    or callable algorithm(X, gram, cov, regularization,
+                          verbose=verbose)
         lars: uses the least angle regression method to solve the lasso problem
         (linear_model.lars_path)
         cd: uses the coordinate descent method to compute the
@@ -700,6 +729,13 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100, bcd_n_iter=1,
     return_n_iter : bool
         Whether or not to return the number of iterations.
 
+    bcd_n_iter : positive integer, optional (default 1)
+        Number of BCD iterations to run. Larger values may lead to better
+        results but at the detriment of speed.
+
+    prox : callable(locals()), optional (default=None)
+        Invoked to leverage the constraints on an updated dictionary atom.
+
     Returns
     -------
     code : array of shape (n_samples, n_components),
@@ -727,10 +763,11 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100, bcd_n_iter=1,
     if batch_size is None:
         batch_size = n_samples
 
-    if method not in ('lars', 'cd', "enet"):
-        raise ValueError('Coding method not supported as a fit algorithm.')
-    if method in ("lars", "cd"):
-        method = 'lasso_' + method
+    if isinstance(method, _basestring):
+        if method not in ('lars', 'cd', "enet"):
+            raise ValueError('Coding method not supported as a fit algorithm.')
+        if method in ("lars", "cd"):
+            method = 'lasso_' + method
 
     t0 = time.time()
     # Avoid integer division problems
@@ -786,6 +823,10 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100, bcd_n_iter=1,
     ii = iter_offset - 1
 
     for ii, batch in zip(range(iter_offset, iter_offset + n_iter), batches):
+        # Check convergence
+        if callback is not None and not callback(locals()):
+            break
+
         this_X = X_train[batch]
         dt = (time.time() - t0)
         if verbose == 1:
@@ -815,13 +856,11 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100, bcd_n_iter=1,
             B = np.dot(this_X.T, this_code.T)
 
         # Update dictionary
+        n_samples = (ii + 1) * batch_size
         dictionary = _update_dict(dictionary, B, A, verbose=verbose,
                                   random_state=random_state, prox=prox,
-                                  bcd_n_iter=bcd_n_iter)
-
-        # Check convergence
-        if ii % 5 == 0 and callback is not None and not callback(locals()):
-            break
+                                  bcd_n_iter=bcd_n_iter,
+                                  n_samples=n_samples)
 
     if return_inner_stats:
         if return_n_iter:
@@ -924,6 +963,8 @@ class SparseCoder(BaseEstimator, SparseCodingMixin):
 
     transform_algorithm : {'lasso_lars', 'lasso_cd', 'lars', 'omp', \
     'threshold'}
+    or callable algorithm(X, gram, cov, regularization,
+                           verbose=verbose)
         Algorithm used to transform the data:
         lars: uses the least angle regression method (linear_model.lars_path)
         lasso_lars: uses Lars to compute the Lasso solution
@@ -1018,6 +1059,8 @@ class DictionaryLearning(BaseEstimator, SparseCodingMixin):
         tolerance for numerical error
 
     fit_algorithm : {'lars', 'cd'}
+    or callable algorithm(X, gram, cov, regularization,
+                          verbose=verbose)
         lars: uses the least angle regression method to solve the lasso problem
         (linear_model.lars_path)
         cd: uses the coordinate descent method to compute the
@@ -1029,6 +1072,8 @@ class DictionaryLearning(BaseEstimator, SparseCodingMixin):
 
     transform_algorithm : {'lasso_lars', 'lasso_cd', 'lars', 'omp', \
     'threshold'}
+    or callable algorithm(X, gram, cov, regularization,
+                          verbose=verbose)
         Algorithm used to transform the data
         lars: uses the least angle regression method (linear_model.lars_path)
         lasso_lars: uses Lars to compute the Lasso solution
@@ -1079,6 +1124,17 @@ class DictionaryLearning(BaseEstimator, SparseCodingMixin):
         If None, the random number generator is the RandomState instance used
         by `np.random`.
 
+    bcd_n_iter : positive integer, optional (default 1)
+        Number of BCD iterations to run. Larger values may lead to better
+        results but at the detriment of speed.
+
+    prox : callable(locals()), optional (default=None)
+        Invoked to leverage the constraints on an updated dictionary atom.
+
+    callback :
+        Callable that gets invoked every five iterations. If it returns
+        non-True, then the main loop (iteration on data) is aborted.
+
     Attributes
     ----------
     components_ : array, [n_components, n_features]
@@ -1108,7 +1164,8 @@ class DictionaryLearning(BaseEstimator, SparseCodingMixin):
                  fit_algorithm='lars', transform_algorithm='omp',
                  transform_n_nonzero_coefs=None, transform_alpha=None,
                  n_jobs=1, code_init=None, dict_init=None, verbose=False,
-                 split_sign=False, bcd_n_iter=1, random_state=None, prox=None):
+                 split_sign=False, bcd_n_iter=1, random_state=None, prox=None,
+                 callback=None):
 
         self._set_sparse_coding_params(n_components, transform_algorithm,
                                        transform_n_nonzero_coefs,
@@ -1123,6 +1180,7 @@ class DictionaryLearning(BaseEstimator, SparseCodingMixin):
         self.bcd_n_iter = bcd_n_iter
         self.random_state = random_state
         self.prox = prox
+        self.callback = callback
 
     def fit(self, X, y=None):
         """Fit the model from data in X.
@@ -1156,7 +1214,8 @@ class DictionaryLearning(BaseEstimator, SparseCodingMixin):
             random_state=random_state,
             bcd_n_iter=self.bcd_n_iter,
             return_n_iter=True,
-            prox=self.prox)
+            prox=self.prox,
+            callback=self.callback)
         self.components_ = U
         self.error_ = E
         return self
@@ -1188,6 +1247,8 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
         total number of iterations to perform
 
     fit_algorithm : {'lars', 'cd'}
+    or callable algorithm(X, gram, cov, regularization,
+                          verbose=verbose)
         lars: uses the least angle regression method to solve the lasso problem
         (linear_model.lars_path)
         cd: uses the coordinate descent method to compute the
@@ -1196,6 +1257,8 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
 
     transform_algorithm : {'lasso_lars', 'lasso_cd', 'lars', 'omp', \
     'threshold'}
+    or callable algorithm(X, gram, cov, regularization,
+                          verbose=verbose)
         Algorithm used to transform the data.
         lars: uses the least angle regression method (linear_model.lars_path)
         lasso_lars: uses Lars to compute the Lasso solution
@@ -1246,6 +1309,17 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
         If None, the random number generator is the RandomState instance used
         by `np.random`.
 
+    bcd_n_iter : positive integer, optional (default 1)
+        Number of BCD iterations to run. Larger values may lead to better
+        results but at the detriment of speed.
+
+    prox : callable(locals()), optional (default=None)
+        Invoked to leverage the constraints on an updated dictionary atom.
+
+    callback :
+        Callable that gets invoked every five iterations. If it returns
+        non-True, then the main loop (iteration on data) is aborted.
+
     Attributes
     ----------
     components_ : array, [n_components, n_features]
@@ -1282,7 +1356,7 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
                  shuffle=True, dict_init=None, transform_algorithm='omp',
                  transform_n_nonzero_coefs=None, transform_alpha=None,
                  verbose=False, split_sign=False, random_state=None,
-                 bcd_n_iter=1, prox=None):
+                 bcd_n_iter=1, prox=None, callback=None):
 
         self._set_sparse_coding_params(n_components, transform_algorithm,
                                        transform_n_nonzero_coefs,
@@ -1298,6 +1372,7 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
         self.random_state = random_state
         self.bcd_n_iter = bcd_n_iter
         self.prox = prox
+        self.callback = callback
 
     def fit(self, X, y=None):
         """Fit the model from data in X.
@@ -1325,7 +1400,8 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
             verbose=self.verbose, random_state=random_state,
             return_inner_stats=True,
             return_n_iter=True,
-            prox=self.prox)
+            prox=self.prox,
+            callback=self.callback)
         self.components_ = U
         # Keep track of the state of the algorithm to be able to do
         # some online fitting (partial_fit)
@@ -1371,7 +1447,8 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
             verbose=self.verbose, return_code=False,
             iter_offset=iter_offset, random_state=self.random_state_,
             return_inner_stats=True, inner_stats=inner_stats,
-            bcd_n_iter=self.bcd_n_iter, prox=self.prox)
+            bcd_n_iter=self.bcd_n_iter, prox=self.prox,
+            callback=self.callback)
         self.components_ = U
 
         # Keep track of the state of the algorithm to be able to do
