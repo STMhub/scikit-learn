@@ -1436,6 +1436,8 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
             dict_init = self.components_
         else:
             dict_init = self.dict_init
+            if dict_init is not None:
+                dict_init = np.asanyarray(dict_init).copy()
         inner_stats = getattr(self, 'inner_stats_', None)
         if iter_offset is None:
             iter_offset = getattr(self, 'iter_offset_', 0)
