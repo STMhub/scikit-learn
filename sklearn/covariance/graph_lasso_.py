@@ -20,7 +20,7 @@ from ..exceptions import ConvergenceWarning
 from ..utils.validation import check_random_state, check_array
 from ..utils import deprecated
 from ..linear_model import lars_path
-from ..linear_model import cd_fast
+from ..linear_model import cd_fast2
 from ..model_selection import check_cv, cross_val_score
 from ..externals.joblib import Parallel, delayed
 import collections
@@ -222,7 +222,7 @@ def graph_lasso(emp_cov, alpha, cov_init=None, mode='cd', tol=1e-4,
                         # Use coordinate descent
                         coefs = -(precision_[indices != idx, idx]
                                   / (precision_[idx, idx] + 1000 * eps))
-                        coefs, _, _, _ = cd_fast.enet_coordinate_descent_gram(
+                        coefs, _, _, _ = cd_fast2.enet_coordinate_descent_gram(
                             coefs, alpha, 0, sub_covariance, row, row,
                             max_iter, enet_tol, check_random_state(None), False)
                     else:
