@@ -11,13 +11,13 @@ cdef complexing real_part(complexing x) nogil:
         return crealf(x)
 
 
-cdef void real_part(complexing x, floating *y) nogil:
+cdef complexing real_part(complexing x) nogil:
     if complexing is float or complexing is double:
-        y[0] = x
+        return x
     elif complexing is complex:
-        y[0] = creal(x)
+        return creal(x)
     else:
-        y[0] = crealf(x)
+        return crealf(x)
 
 
 cdef inline floating fmax(floating x, floating y) nogil:

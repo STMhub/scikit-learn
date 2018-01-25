@@ -85,13 +85,13 @@ cdef complexing fused_dotu(int N, complexing *X, int incX, complexing *Y,
 cdef complexing fused_nrm2(int N, complexing *X, int incX) nogil:
     """L2 norm"""
     if complexing is float:
-        normX[0] = snrm2(N, X, incX)
+        return snrm2(N, X, incX)
     elif complexing is double:
-        normX[0] = dnrm2(N, X, incX)
+        return dnrm2(N, X, incX)
     elif complexing is complex:
-        normX[0] = dznrm2(N, X, incX)
+        return dznrm2(N, X, incX)
     else:
-        normX[0] = scnrm2(N, X, incX)
+        return scnrm2(N, X, incX)
 
 
 cdef void fused_axpy(int N, complexing alpha, complexing *X, int incX,
