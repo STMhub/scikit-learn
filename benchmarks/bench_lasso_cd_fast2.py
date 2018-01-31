@@ -19,7 +19,7 @@ from sklearn.linear_model import cd_fast, cd_fast2
 
 
 def compute_bench(alpha, n_samples, n_features, precompute,
-                  n_targets=5, max_iter=1000, tol=1e-4, l1_ratio=0.,
+                  n_targets=10, max_iter=1000, tol=0, l1_ratio=1.,
                   backend="legacy", multi_task=False, random_state=0):
     it = 0
     results = []
@@ -72,6 +72,7 @@ def compute_bench(alpha, n_samples, n_features, precompute,
                 W = W[0]
                 n_iter = solver.enet_coordinate_descent(
                     W, l1_reg, l2_reg, X, Y, max_iter, tol, rng)[-1]
+            print(n_iter, l1_reg)
             results.append(time() - tstart)
     return results
 
@@ -82,16 +83,16 @@ if __name__ == '__main__':
     import seaborn as sns
     sns.set_style("darkgrid")
 
-    alpha = 0.1  # regularization parameter
+    alpha = 0.01  # regularization parameter
     l1_ratio = 1.
 
     plt.figure('scikit-learn LASSO benchmark results')
-    for i, precompute in enumerate([True, False]):
+    for i, precompute in enumerate([True, False][:1]):
         plt.subplot("21%i" % (i + 1))
         if precompute:
             n_features = 100
             list_n_features = [n_features]
-            list_n_samples = np.linspace(100, 100000, 5).astype(np.int)
+            list_n_samples = np.linspace(100, 1000000, 5).astype(np.int)
             plt.title('precomputed Gram matrix, %d features, alpha=%s' % (
                 n_features, alpha))
             plt.xlabel('number of samples')

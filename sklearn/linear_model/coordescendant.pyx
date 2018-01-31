@@ -30,8 +30,6 @@
 #           - Certain problems arising in data-driven compressive sensing
 #
 # XXX TODO:
-#    - Add single-precision (32-bit) support. Not easy due to issues with
-#      specialization of fused types. Long story short...
 #    - Add support for sparse matrices and vectors
 #    - Screening rules for LASSO-type problems (inexact Stanford, GapSafe,
 #      etc.)
@@ -328,10 +326,10 @@ def coordescendant(np.ndarray[complexing, ndim=2, mode="c"] W,
                 else:
                     alpha = -1
                     if fused_nrm2(n_targets, W_ptr + j * n_targets, inc) != 0.:
-                        fused_geru(
-                            CblasColMajor, n_samples, n_targets, alpha,
-                            X_or_Gram_ptr + j * n_samples, inc,
-                            W_ptr + j * n_targets, inc, R_ptr, n_samples)
+                        fused_geru(CblasColMajor, n_samples, n_targets, alpha,
+                                   X_or_Gram_ptr + j * n_samples, inc,
+                                   W_ptr + j * n_targets, inc, R_ptr,
+                                   n_samples)
 
                 # update the maximum absolute coefficient
                 d_Wj_abs_max = diff_abs_max(n_targets, W_ptr + j * n_targets, 1,
@@ -341,8 +339,7 @@ def coordescendant(np.ndarray[complexing, ndim=2, mode="c"] W,
                 W_abs_max = fmax(W_abs_max, Wj_abs_max)
 
             # check convergence
-            if (W_abs_max == 0. or
-                d_W_abs_max / W_abs_max < d_W_abs_tol or
+            if (W_abs_max == 0. or d_W_abs_max / W_abs_max < d_W_abs_tol or
                 n_iter == max_iter - 1):
                 # the biggest coordinate update of this iteration was smaller
                 # than check the duality gap as ultimate stopping criterion
