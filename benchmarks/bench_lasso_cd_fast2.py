@@ -54,9 +54,14 @@ def compute_bench(alpha, n_samples, n_features, precompute,
             W = np.zeros((n_targets, nf), dtype=X.dtype, order="F")
             tstart = time()
             if multi_task:
-                n_iter = solver.enet_coordinate_descent_multi_task(
-                    W, l1_reg, l2_reg, X, Y, max_iter, tol, rng)[-1]
-                results.append(time() - tstart)
+                if precompute:
+                    Gram = np.ascontiguousarray(np.dot(X.T, X))
+                    Cov = np.dot(X.T, Y)
+                    n_iter = solver.enet_coordinate_descent_multi_task_gram(
+                        W, l1_reg, l2_reg, Gram, Cov, Y, max_iter, tol, rng)[-1]
+                else:
+                    n_iter = solver.enet_coordinate_descent_multi_task(
+                        W, l1_reg, l2_reg, X, Y, max_iter, tol, rng)[-1]
             elif precompute:
                 assert n_targets == 1
                 Gram = np.ascontiguousarray(np.dot(X.T, X))
@@ -72,8 +77,9 @@ def compute_bench(alpha, n_samples, n_features, precompute,
                 W = W[0]
                 n_iter = solver.enet_coordinate_descent(
                     W, l1_reg, l2_reg, X, Y, max_iter, tol, rng)[-1]
-            print(n_iter, l1_reg)
             results.append(time() - tstart)
+            if tol <= 0.:
+                assert(n_iter == max_iter)
     return results
 
 
@@ -87,44 +93,46 @@ if __name__ == '__main__':
     l1_ratio = 1.
 
     plt.figure('scikit-learn LASSO benchmark results')
-    for i, precompute in enumerate([True, False][:1]):
-        plt.subplot("21%i" % (i + 1))
+    for i, precompute in enumerate([True, False]):
         if precompute:
-            n_features = 100
+            n_features = 50
             list_n_features = [n_features]
             list_n_samples = np.linspace(100, 1000000, 5).astype(np.int)
-            plt.title('precomputed Gram matrix, %d features, alpha=%s' % (
-                n_features, alpha))
-            plt.xlabel('number of samples')
         else:
-            n_samples = 2000
+            n_samples = 200
             list_n_samples = [n_samples]
-            list_n_features = np.linspace(500, 4000, 5).astype(np.int)
-            plt.title('%d samples, alpha=%s' % (n_samples, alpha))
-            plt.xlabel('number of features')
-        plt.ylabel('Time (s)')
-        for backend, color in zip(["legacy", "ninja"],
-                                  ["r", "b"]):
-            for multi_task, style in zip([True, False],
-                                         ["-", "--"]):
-                if multi_task and precompute:
-                    continue
+            list_n_features = np.linspace(500, 5000, 5).astype(np.int)
+        for j, multi_task in enumerate([False, True]):
+            plt.subplot2grid((2, 2), (i, j))
+            if j == 0:
+                plt.ylabel('Time (s)')
+            if precompute:
                 if multi_task:
-                    tag = "Multi"
+                    plt.title("Multi-task 'Gram mode' (nf=%i)" % n_features)
                 else:
-                    tag = "Single"
+                    plt.title("Single-task 'Gram mode' (nf=%i)" % n_features)
+                plt.xlabel('number of samples')
+            else:
+                if multi_task:
+                    plt.title("Multi-task 'Non-Gram mode' (ns=%i)" % n_samples)
+                else:
+                    plt.title("Single-task 'Non-Gram mode' (ns=%i)" % (
+                        n_samples))
+                plt.xlabel('number of features')
+            for backend, color in zip(["legacy", "ninja"], ["r", "b"]):
+                if multi_task and precompute and backend == "legacy":
+                    continue
                 results = compute_bench(
                     alpha, list_n_samples, list_n_features, l1_ratio=l1_ratio,
                     multi_task=multi_task, backend=backend,
-                    n_targets=10 if multi_task else 1, precompute=precompute)
+                    n_targets=5 if multi_task else 1, precompute=precompute)
                 if precompute:
                     x = list_n_samples
                 else:
                     x = list_n_features
-                plt.plot(x, results, '%s%s' % (color, style), linewidth=2,
-                         label='%s-task Lasso (%s)' % (tag, backend))
-        plt.axis('tight')
-        plt.legend(loc="best")
+                plt.plot(x, results, "o-", c=color, linewidth=3,
+                         label='Lasso (%s)' % backend)
+    plt.legend(loc="best")
     plt.tight_layout()
     # plt.savefig("paper/figs/bench.png", dpi=200, bbox_inches="tight")
     plt.show()
