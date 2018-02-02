@@ -9,7 +9,7 @@ from utils cimport abs_max, arr_max, diff_abs_max, relu, fused_nrm2_squared
 from dual_gap cimport compute_dual_gap
 from coordescendant cimport L21_PENALTY
 from prox_l1 cimport prox_l1
-from proj_l1 cimport proj_l1
+from proj_l1 cimport proj_l1, enet_projection
 from prox_l2 cimport prox_l2
 from proj_l2 cimport proj_l2
 
@@ -86,3 +86,9 @@ def _py_prox_l2(np.ndarray[floating, ndim=1] w, floating reg,
 def _py_proj_l2(np.ndarray[floating, ndim=1] w, floating reg,
                 floating ajj=1.):
     proj_l2(len(w), &w[0], reg, ajj)
+
+
+def _py_enet_projection(floating[:] v, floating[:] out, floating radius,
+                        floating l1_ratio):
+    cdef unsigned int m = len(v)
+    enet_projection(m, &v[0], &out[0], radius, l1_ratio)
