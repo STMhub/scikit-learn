@@ -10,8 +10,10 @@ from nilearn.decomposition.dict_learning import BaseDecomposition
 from nilearn.decomposition.base import mask_and_reduce
 from sklearn.linear_model.coordescendant import L11_PENALTY
 from sklearn.decomposition.dict_learning_utils import _general_update_dict
+import os
 import sys
-sys.path.append("/home/elvis/CODE/FORKED/elvis_dohmatob/rsfmri2tfmri")
+sys.path.append(os.path.join(os.environ["HOME"],
+                             "CODE/FORKED/elvis_dohmatob/rsfmri2tfmri"))
 from datasets import load_imgs
 
 
