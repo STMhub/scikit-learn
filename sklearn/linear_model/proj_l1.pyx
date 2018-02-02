@@ -12,21 +12,8 @@ from libc.math cimport fabs, sqrt
 cimport numpy as np
 import numpy as np
 from cython cimport floating
+from utils cimport fsign
 from blas_api cimport fused_scal, fused_copy
-
-
-cdef inline floating relu(floating a) nogil:
-    if a > 0:
-        return a
-    else:
-        return 0
-
-
-cdef inline floating sign(floating a) nogil:
-    if a >= 0.:
-        return 1.
-    else:
-        return -1.
 
 
 cdef inline void swap(floating *b, unsigned int i, unsigned int j,
@@ -57,6 +44,7 @@ cdef void enet_projection(unsigned int m, floating *v, floating *out, floating r
     cdef floating c
     cdef floating l
     cdef floating norm = 0
+    cdef floating tmp
 
     # XXX this is nasty, we should be doing such corner-case handling explicitly :/
     if radius == 0:
@@ -124,7 +112,11 @@ cdef void enet_projection(unsigned int m, floating *v, floating *out, floating r
             else:
                 l = (s - radius) / rho
             for i in range(m):
-                out[i] = sign(v[i]) * relu(fabs(v[i]) - l) / (1. + l * gamma)
+                tmp = fabs(v[i]) - l
+                if tmp > 0.:
+                    out[i] = fsign(v[i]) * tmp / (1. + l * gamma)
+                else:
+                    out[i] = 0.
 
 
 cdef inline void proj_l1(int n, floating *w, floating reg,
