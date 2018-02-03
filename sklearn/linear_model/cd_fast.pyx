@@ -702,7 +702,7 @@ def enet_coordinate_descent_multi_task(floating[::1, :] W, floating l1_reg,
                                        np.ndarray[floating, ndim=2, mode='fortran'] X,
                                        np.ndarray[floating, ndim=2] Y,
                                        int max_iter, floating tol, object rng,
-                                       bint random=0):
+                                       bint random=0, bint use_gemv=False):
     """Cython version of the coordinate descent algorithm
         for Elastic-Net mult-task regression
 
@@ -764,6 +764,7 @@ def enet_coordinate_descent_multi_task(floating[::1, :] W, floating l1_reg,
     cdef floating l21_norm
     cdef unsigned int ii
     cdef unsigned int jj
+    cdef unsigned int kk
     cdef unsigned int n_iter = 0
     cdef unsigned int f_iter
     cdef UINT32_t rand_r_state_seed = rng.randint(0, RAND_R_MAX)
@@ -817,9 +818,14 @@ def enet_coordinate_descent_multi_task(floating[::1, :] W, floating l1_reg,
                          wii_ptr, 1, &R[0, 0], n_tasks)
 
                 # tmp = np.dot(X[:, ii][None, :], R).ravel()
-                gemv(CblasRowMajor, CblasTrans,
-                      n_samples, n_tasks, 1.0, &R[0, 0], n_tasks,
-                      X_ptr + ii * n_samples, 1, 0.0, &tmp[0], 1)
+                if use_gemv:
+                    gemv(CblasRowMajor, CblasTrans,
+                         n_samples, n_tasks, 1.0, &R[0, 0], n_tasks,
+                         X_ptr + ii * n_samples, 1, 0.0, &tmp[0], 1)
+                else:
+                    for kk in range(n_tasks):
+                        tmp[kk] = dot(n_samples, X_ptr + ii * n_samples, 1,
+                                      &R[0, 0] + kk, n_tasks)
 
                 # nn = sqrt(np.sum(tmp ** 2))
                 nn = nrm2(n_tasks, &tmp[0], 1)

@@ -23,9 +23,10 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
                  low_pass=None, high_pass=None, t_r=None, target_affine=None,
                  target_shape=None, mask_strategy='epi', mask_args=None,
                  memory=Memory(cachedir=None), memory_level=0, n_jobs=1,
-                 dict_penalty_model=L11_PENALTY, batch_size=20, n_epochs=1,
-                 reduction_ratio=1., dict_init=None, alpha=1., dict_alpha=1.,
-                 fit_algorithm="lars", rescale_atoms=False, verbose=0):
+                 dict_penalty_model=L11_PENALTY, positive=True, batch_size=20,
+                 n_epochs=1, reduction_ratio=1., dict_init=None, alpha=1.,
+                 dict_alpha=1., fit_algorithm="lars", rescale_atoms=False,
+                 verbose=0):
         fMRIMiniBatchDictionaryLearning.__init__(
             self, n_components=n_components, random_state=random_state,
             mask=mask, smoothing_fwhm=smoothing_fwhm, standardize=standardize,
@@ -37,6 +38,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
             alpha=alpha, n_epochs=n_epochs, verbose=verbose)
         self.dict_penalty_model = dict_penalty_model
         self.dict_alpha = dict_alpha
+        self.positive = positive
         self.fit_algorithm = fit_algorithm
         self.rescale_atoms = rescale_atoms
 
@@ -57,7 +59,8 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
             Shape (n_samples, n_features)
         """
         updater = partial(_general_update_dict, reg=self.dict_alpha,
-                          penalty_model=self.dict_penalty_model)
+                          penalty_model=self.dict_penalty_model,
+                          positive=self.positive)
         self.sodl_ = MiniBatchDictionaryLearning(
             n_components=self.n_components, random_state=self.random_state,
             verbose=self.verbose, updater=updater, ensure_nonzero=True,

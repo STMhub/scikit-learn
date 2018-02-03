@@ -19,7 +19,7 @@ from sklearn.linear_model import cd_fast, cd_fast2
 
 
 def compute_bench(alpha, n_samples, n_features, precompute,
-                  n_targets=10, max_iter=1000, tol=0, l1_ratio=1.,
+                  n_targets=10, max_iter=1000, tol=1e-4, l1_ratio=1.,
                   backend="legacy", multi_task=False, random_state=0):
     it = 0
     results = []
@@ -49,8 +49,10 @@ def compute_bench(alpha, n_samples, n_features, precompute,
             l2_reg = ns * alpha * (1. - l1_ratio)
             if backend == "legacy":
                 solver = cd_fast
-            else:
+            elif backend == "new":
                 solver = cd_fast2
+            else:
+                raise NotImplementedError(backend)
             W = np.zeros((n_targets, nf), dtype=X.dtype, order="F")
             tstart = time()
             if multi_task:
@@ -89,13 +91,13 @@ if __name__ == '__main__':
     import seaborn as sns
     sns.set_style("darkgrid")
 
-    alpha = 0.01  # regularization parameter
+    alpha = 0.1  # regularization parameter
     l1_ratio = 1.
 
     plt.figure('scikit-learn LASSO benchmark results')
     for i, precompute in enumerate([True, False]):
         if precompute:
-            n_features = 50
+            n_features = 100
             list_n_features = [n_features]
             list_n_samples = np.linspace(100, 1000000, 5).astype(np.int)
         else:
@@ -105,21 +107,21 @@ if __name__ == '__main__':
         for j, multi_task in enumerate([False, True]):
             plt.subplot2grid((2, 2), (i, j))
             if j == 0:
-                plt.ylabel('Time (s)')
+                plt.ylabel('time (s)')
             if precompute:
                 if multi_task:
                     plt.title("Multi-task 'Gram mode' (nf=%i)" % n_features)
                 else:
                     plt.title("Single-task 'Gram mode' (nf=%i)" % n_features)
-                plt.xlabel('number of samples')
+                plt.xlabel('number of samples $\\times 10^3$')
             else:
                 if multi_task:
                     plt.title("Multi-task 'Non-Gram mode' (ns=%i)" % n_samples)
                 else:
                     plt.title("Single-task 'Non-Gram mode' (ns=%i)" % (
                         n_samples))
-                plt.xlabel('number of features')
-            for backend, color in zip(["legacy", "ninja"], ["r", "b"]):
+                plt.xlabel('number of features $\\times 10^5$')
+            for backend, color in zip(["legacy", "new"], ["r", "b"]):
                 if multi_task and precompute and backend == "legacy":
                     continue
                 results = compute_bench(
@@ -127,9 +129,9 @@ if __name__ == '__main__':
                     multi_task=multi_task, backend=backend,
                     n_targets=5 if multi_task else 1, precompute=precompute)
                 if precompute:
-                    x = list_n_samples
+                    x = list_n_samples / float(10 ** 5)
                 else:
-                    x = list_n_features
+                    x = list_n_features / float(10 ** 3)
                 plt.plot(x, results, "o-", c=color, linewidth=3,
                          label='Lasso (%s)' % backend)
     plt.legend(loc="best")

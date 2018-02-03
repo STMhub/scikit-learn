@@ -152,16 +152,13 @@ def coordescendant(np.ndarray[floating, ndim=2, mode="c"] W,
     cdef int n_features = X_or_Gram.shape[1]
     cdef int n_targets = Y_or_Cov.shape[1]
     cdef floating[:] Wj = np.empty(n_targets, dtype=dtype)
-    cdef floating ajj
-    cdef floating alpha, beta
+    cdef floating ajj, alpha, beta
     cdef int X_size = n_samples * n_features
     cdef int W_size = n_features * n_targets
     cdef int R_size = n_samples * n_targets
-    cdef int inc = 1
     cdef floating Wj_abs_max, d_Wj_abs_max, W_abs_max, d_W_abs_max, d_W_abs_tol = tol
     cdef floating Wj_norm
-    cdef int j, k
-    cdef unsigned int n_iter = 0
+    cdef unsigned int j, k, n_iter = 0
     cdef UINT32_t rand_r_state_seed
     cdef UINT32_t *rand_r_state
     if random and rng is not None:
@@ -218,8 +215,8 @@ def coordescendant(np.ndarray[floating, ndim=2, mode="c"] W,
             X_col_norms_squared[j] = X_or_Gram[j, j]
         else:
             X_col_norms_squared[j] = fused_dot(
-                n_samples, X_or_Gram_ptr + j * n_samples, inc,
-                X_or_Gram_ptr + j * n_samples, inc)
+                n_samples, X_or_Gram_ptr + j * n_samples, 1,
+                X_or_Gram_ptr + j * n_samples, 1)
 
     # main loop: the rest of code doesn't need the GIL
     tol *= Y_norm2
@@ -241,22 +238,20 @@ def coordescendant(np.ndarray[floating, ndim=2, mode="c"] W,
                 if n_targets == 1:
                     Wj_ptr[0] = W_ptr[j]
                 else:
-                    fused_copy(n_targets, W_ptr + j * n_targets, inc, Wj_ptr,
-                               inc)
+                    fused_copy(n_targets, W_ptr + j * n_targets, 1, Wj_ptr, 1)
 
                 # rank-1 update: R += np.outer(X_or_Gram[:, j], W[j])
                 if n_targets == 1:
                     if W_ptr[j] != 0.:
                         fused_axpy(
                             n_samples, W_ptr[j], X_or_Gram_ptr + j * n_samples,
-                            inc, R_ptr, inc)
+                            1, R_ptr, 1)
                 else:
                     alpha = 1
-                    if fused_nrm2(n_targets, W_ptr + j * n_targets, inc) != 0.:
+                    if fused_nrm2(n_targets, W_ptr + j * n_targets, 1) != 0.:
                         fused_ger(CblasColMajor, n_samples, n_targets, alpha,
-                                  X_or_Gram_ptr + j * n_samples, inc,
-                                  W_ptr + j * n_targets, inc, R_ptr,
-                                  n_samples)
+                                  X_or_Gram_ptr + j * n_samples, 1,
+                                  W_ptr + j * n_targets, 1, R_ptr, n_samples)
 
                 # XXX The following step only makes sense if we're not running
                 # in "precomputed" mode. However, for some reason, sklearn's
@@ -270,15 +265,15 @@ def coordescendant(np.ndarray[floating, ndim=2, mode="c"] W,
                         alpha = 1.
                     for k in range(n_targets):
                         W_ptr[j * n_targets + k] = alpha * fused_dot(
-                            n_samples, X_or_Gram_ptr + j * n_samples, inc,
-                            R_ptr + k * n_samples, inc)
+                            n_samples, X_or_Gram_ptr + j * n_samples, 1,
+                            R_ptr + k * n_samples, 1)
                 else:
                     # copy: W[j] <- R[:, j]
                     if n_targets == 1:
                         W_ptr[j] = R_ptr[j]
                     else:
                         fused_copy(n_targets, R_ptr + j, n_samples,
-                                   W_ptr + j * n_targets, inc)
+                                   W_ptr + j * n_targets, 1)
 
                 # proximal update
                 if positive:
@@ -299,19 +294,19 @@ def coordescendant(np.ndarray[floating, ndim=2, mode="c"] W,
                         else:
                             alpha = 0.
                         fused_scal(n_targets, alpha, W_ptr + j * n_targets,
-                                   inc)
+                                   1)
 
                 # rank-1 update: R -= np.outer(X_or_Gram[:, j], W[j])
                 if n_targets == 1:
                     if W_ptr[j] != 0.:
                         fused_axpy(
                             n_samples, -W_ptr[j], X_or_Gram_ptr + j * n_samples,
-                            inc, R_ptr, inc)
+                            1, R_ptr, 1)
                 else:
-                    if fused_nrm2(n_targets, W_ptr + j * n_targets, inc) != 0.:
+                    if fused_nrm2(n_targets, W_ptr + j * n_targets, 1) != 0.:
                         fused_ger(CblasColMajor, n_samples, n_targets, -1,
-                                  X_or_Gram_ptr + j * n_samples, inc,
-                                  W_ptr + j * n_targets, inc, R_ptr, n_samples)
+                                  X_or_Gram_ptr + j * n_samples, 1,
+                                  W_ptr + j * n_targets, 1, R_ptr, n_samples)
 
                 # update the maximum absolute coefficient
                 d_Wj_abs_max = diff_abs_max(n_targets, W_ptr + j * n_targets, 1,

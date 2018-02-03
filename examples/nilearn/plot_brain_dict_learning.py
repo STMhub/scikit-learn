@@ -13,7 +13,7 @@ random_state = 42
 n_components = 40
 bcd_n_iter = 1
 n_epochs = 1
-dict_alpha = 10.
+dict_alpha = 100.
 batch_size = 30
 dataset = "IBC bold"
 
@@ -33,13 +33,10 @@ elif dataset == "IBC zmaps":
     "storage/store/data/ibc/derivatives/group/gm_mask.nii.gz")
 elif dataset == "IBC bold":
     from datasets import load_imgs
-    mask_img = os.path.join("/home/elvis/mnt/32-bit-system/home/elvis/drago",
-    "storage/store/data/ibc/derivatives/group/gm_mask.nii.gz")
-    X = glob.glob(os.path.join(root,
-                               "storage/store/data/ibc/derivatives",
-                               "masked_IBC/sub-*/ses-05/func",
-                               "wrdcsub-*_bold.npy"))
-    assert 0
+    mask_img = os.path.join(root, "storage/store/data/ibc/derivatives/group",
+                            "movie_mask.nii.gz")
+    X = glob.glob(os.path.join(root, "storage/store/data/ibc/derivatives",
+                               "sub-*/ses-05/func/wrdcsub-*_bold.npy"))
     X = [img for Xs in load_imgs(X) for img in Xs]
 else:
     raise NotImplementedError(dataset)
@@ -50,20 +47,20 @@ n_voxels = mask_img.get_data().sum()
 
 prox = ProximalOperator(which="graph-net", affine=mask_img.affine, fwhm=2,
                         mask=mask_img.get_data().astype(bool), l1_ratio=.1,
-                        kernel="gaussian", radius=1., positive=True)
+                        kernel="gaussian", radius=10.)
 model = ProximalfMRIMiniBatchDictionaryLearning(
     n_components=n_components, random_state=random_state, fit_algorithm="ridge",
-    dict_penalty_model=-2, mask=mask_img, n_epochs=1, batch_size=batch_size,
+    dict_penalty_model=-1, mask=mask_img, n_epochs=1, batch_size=batch_size,
     dict_alpha=dict_alpha, verbose=2)
 model.fit(X)
 
 import matplotlib.pyplot as plt
 from nilearn.plotting import plot_stat_map
 
-for c in [3, 7, 17, 37, 38]:
+for c in range(0, n_components, 2):
     if c == 3:
         continue
-    plot_stat_map(unmask(model.components_[c], mask_img), display_mode="yz",
+    plot_stat_map(unmask(model.components_[c], mask_img), display_mode="ortho",
                   colorbar=False, black_bg=True)
     out_file = os.path.join("/home/elvis/CODE/FORKED/coordescendant/paper",
                             "figs/%s_comp%02i.png" % (dataset, c))
