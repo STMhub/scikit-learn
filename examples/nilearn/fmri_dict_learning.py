@@ -80,11 +80,12 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
         updater = partial(_general_update_dict, reg=self.dict_alpha,
                           penalty_model=self.dict_penalty_model,
                           positive=self.positive)
-        self.sodl_ = MiniBatchDictionaryLearning(
-            n_components=self.n_components, random_state=self.random_state,
-            verbose=self.verbose, updater=updater, ensure_nonzero=True,
-            fit_algorithm=self.fit_algorithm, dict_init=self.dict_init,
-            n_iter=1)
+        if not hasattr(self, "sodl_"):  # warm-start maybe
+            self.sodl_ = MiniBatchDictionaryLearning(
+                n_components=self.n_components, random_state=self.random_state,
+                verbose=self.verbose, updater=updater, ensure_nonzero=True,
+                fit_algorithm=self.fit_algorithm, dict_init=self.dict_init,
+                n_iter=1)
         n_samples = len(data)
         batch_size = min(n_samples, self.batch_size)
         batches = list(gen_batches(len(data), batch_size))
