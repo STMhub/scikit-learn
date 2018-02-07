@@ -27,8 +27,9 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
                  memory=Memory(cachedir=None), memory_level=0, n_jobs=1,
                  dict_penalty_model=L11_PENALTY, positive=True, batch_size=20,
                  n_epochs=1, reduction_ratio=1., dict_init=None, alpha=1.,
-                 dict_alpha=1., fit_algorithm="lars", rescale_atoms=False,
-                 callback=None, learning_curve_nticks=10, verbose=0):
+                 dict_alpha=1., fit_algorithm="lars", transform_algorithm=None,
+                 rescale_atoms=False, callback=None, learning_curve_nticks=10,
+                 verbose=0):
         fMRIMiniBatchDictionaryLearning.__init__(
             self, n_components=n_components, random_state=random_state,
             mask=mask, smoothing_fwhm=smoothing_fwhm, standardize=standardize,
@@ -42,6 +43,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
         self.dict_alpha = dict_alpha
         self.positive = positive
         self.fit_algorithm = fit_algorithm
+        self.transform_algorithm = transform_algorithm
         self.rescale_atoms = rescale_atoms
         self.callback = callback
         self.learning_curve_nticks = learning_curve_nticks
@@ -80,12 +82,16 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
         updater = partial(_general_update_dict, reg=self.dict_alpha,
                           penalty_model=self.dict_penalty_model,
                           positive=self.positive)
-        if not hasattr(self, "sodl_"):  # warm-start maybe
-            self.sodl_ = MiniBatchDictionaryLearning(
+        dico_extra_params = {}
+        for param in ["transform_algorithm"]:
+            if hasattr(self, param) and getattr(self, param) is not None:
+                dico_extra_params[param] = getattr(self, param)
+        if not hasattr(self, "dico_"):  # warm-start maybe
+            self.dico_ = MiniBatchDictionaryLearning(
                 n_components=self.n_components, random_state=self.random_state,
                 verbose=self.verbose, updater=updater, ensure_nonzero=True,
                 fit_algorithm=self.fit_algorithm, dict_init=self.dict_init,
-                n_iter=1)
+                n_iter=1, **dico_extra_params)
         n_samples = len(data)
         batch_size = min(n_samples, self.batch_size)
         batches = list(gen_batches(len(data), batch_size))
@@ -101,7 +107,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
                 self._log('Epoch %02i/%02i, batch %02i/%02i' % (
                     epoch + 1, self.n_epochs, cnt, n_iter))
                 data_batch = self._load_data(data[batch])
-                self.sodl_.partial_fit(data_batch)
+                self.dico_.partial_fit(data_batch)
 
                 # invoke user-supplied callback
                 if self.callback is not None:
@@ -110,7 +116,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
                         self.callback(locals())
 
         # final sip
-        self.components_ = self.sodl_.components_
+        self.components_ = self.dico_.components_
         if self.rescale_atoms:
             # Unit-variance scaling
             S = np.sqrt(np.sum(self.components_ ** 2, axis=1))
@@ -127,21 +133,21 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
 
     def transform(self, imgs, components=None, batch_size=None):
         if components is None:
-            check_is_fitted(self, "sodl_")
-            sodl = self.sodl_
+            check_is_fitted(self, "dico_")
+            dico = self.dico_
         else:
-            sodl = clone(self.sodl_)
-            sodl.components_ = components
+            dico = clone(self.dico_)
+            dico.components_ = components
         if isinstance(imgs, _basestring):
             imgs = [imgs]
         n_imgs = len(imgs)
-        n_components = len(sodl.components_)
+        n_components = len(dico.components_)
         codes = np.ndarray((n_imgs, n_components),
-                           dtype=sodl.components_.dtype)
+                           dtype=dico.components_.dtype)
         if batch_size is None:
             batch_size = self.batch_size
         batch_size = min(n_imgs, batch_size)
         for batch in gen_batches(len(imgs), batch_size):
             data_batch = self._load_data(imgs[batch])
-            codes[batch] = sodl.transform(data_batch)
+            codes[batch] = dico.transform(data_batch)
         return codes

@@ -1,6 +1,7 @@
 import glob
 import os
-for zmap in sorted(glob.glob("/home/elvis/mnt/32-bit-system/home/elvis/drago/storage/store/data/ibc/derivatives/sub-*/ses-*/*/stat_maps/*.nii.gz")):
+root = os.environ.get("ROOT", "/")
+for zmap in sorted(glob.glob(root, "/store/data/ibc/derivatives/sub-*/ses-*/*/stat_maps/*.nii.gz")):
     dst = zmap.replace("drago/storage", "drago/storage/tompouce/dohmatob/drago/storage")
     dst_dir = os.path.dirname(dst)
     if not os.path.exists(dst_dir):

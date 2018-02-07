@@ -3,7 +3,9 @@ import glob
 import time
 from functools import partial
 import numpy as np
+from sklearn.externals.joblib import delayed, Parallel
 from sklearn.model_selection import train_test_split
+# from sklearn.metrics import explained_variance_score
 from nilearn.image.image import check_niimg
 from nilearn.masking import unmask
 from nilearn_prox_operators import ProximalOperator
@@ -19,8 +21,8 @@ from datasets import load_hcp_rest, load_imgs, fetch_hcp_task
 random_state = 42
 n_components = 40
 bcd_n_iter = 1
-n_epochs = 2
-dict_alpha = 1.  # 100.
+n_epochs = 1
+dict_alpha = 100.
 dataset = os.environ.get("DATASET", "IBC zmaps")
 n_jobs = os.environ.get("N_JOBS", None)
 if n_jobs is None:
@@ -75,38 +77,83 @@ X_train, X_test, mask_img, batch_size = get_data(dataset)
 artefacts = dict(components=[], codes=[], r2=[], pearsonr=[])
 
 
-def callback(env):
-    model = env["self"]
-    components = model.sodl_.components_.copy()
-    codes = model.transform(X_test)
-    artefacts["components"].append(components)
-    artefacts["codes"].append(codes)
-    X_true = np.asarray(model._load_data(X_test))
-    X_pred = np.dot(codes, components)
-    for scorer in ["r2", "pearsonr"]:
-        scores = score_multioutput(X_true.T, X_pred.T, scorer=scorer)
-        artefacts[scorer].append(scores)
+class Artefacts(object):
+    def __init__(self, penalty):
+        self.penalty = penalty
+        self.stuff_ = dict(components=[], codes=[], r2=[], pearsonr=[])
+
+    def callback(self, env):
+        model = env["self"]
+        components = model.dico_.components_.copy()
+        codes = model.transform(X_test)
+        self.stuff_["components"].append(components)
+        self.stuff_["codes"].append(codes)
+
+    def compute_scores(self):
+        X_true = np.asarray(model._load_data(X_test))
+        for codes, components in zip(self.stuff_["codes"],
+                                     self.stuff_["components"]):
+            X_pred = np.dot(codes, components)
+            for scorer in ["r2", "pearsonr"]:
+                scores = Parallel(n_jobs=n_jobs)(
+                    delayed(score_multioutput)(
+                        x_true, x_pred, scorer=scorer)
+                    for x_true, x_pred in zip(X_true, X_pred))
+                self.stuff_[scorer].append(scores)
+            # scores = Parallel(n_jobs=n_jobs)(
+            #     delayed(explained_variance_score)(x_true, x_pred)
+            #     for x_true, x_pred in zip(X_true, X_pred))
+            # self.stuff_["ev"].append(scores)
 
 
-prox = ProximalOperator(which="graph-net", affine=mask_img.affine, fwhm=2,
-                        mask=mask_img.get_data().astype(bool), l1_ratio=.1,
-                        kernel="gaussian", radius=10.)
-model = ProximalfMRIMiniBatchDictionaryLearning(
-    n_components=n_components, random_state=random_state,
-    fit_algorithm=partial(_enet_coder, l1_ratio=0., alpha=1.),
-    dict_penalty_model=prox, mask=mask_img, n_epochs=n_epochs,
-    callback=callback, batch_size=batch_size, dict_alpha=dict_alpha,
-    n_jobs=n_jobs, verbose=1)
-t0 = time.time()
-model.fit(X_train)
-artefacts["duration"] = time.time() - t0
+coder = partial(_enet_coder, l1_ratio=0., alpha=1.)
+sodl_prox = ProximalOperator(which="graph-net", affine=mask_img.affine,
+                             mask=mask_img.get_data().astype(bool), radius=10.,
+                             l1_ratio=.1)
+social_prox = ProximalOperator(which="graph-net", affine=mask_img.affine,
+                               fwhm=2, mask=mask_img.get_data().astype(bool),
+                               kernel="gaussian", radius=10.)
+all_artefacts = []
+for dict_alpha, prox, tag in zip([100., 1.], [-1, sodl_prox],
+                                 ["L1", "Graph-Net"]):
+    artefacts = Artefacts(tag)
+    model = ProximalfMRIMiniBatchDictionaryLearning(
+        n_components=n_components, random_state=random_state,
+        fit_algorithm=coder, dict_penalty_model=prox, mask=mask_img,
+        n_epochs=n_epochs, callback=artefacts.callback, n_jobs=n_jobs,
+        batch_size=batch_size, dict_alpha=dict_alpha, verbose=1)
+    t0 = time.time()
+    model.fit(X_train)
+    artefacts.stuff_["duration"] = time.time() - t0
+    all_artefacts.append(artefacts)
 
-import matplotlib.pyplot as plt
-from nilearn.plotting import plot_stat_map
+
+def create_results_df(recompute_scores=True):
+    import pandas as pd
+    df = []
+    for artefacts in all_artefacts:
+        if recompute_scores:
+            artefacts.compute_scores()
+        elif "ev" not in artefacts.stuff_:
+            raise RuntimeError
+        n_heartbeat = len(artefacts.stuff_["r2"])
+        for ns in range(n_heartbeat):
+            n_samples = int(
+                np.ceil((ns + 1) * len(X_train) / float(n_heartbeat)))
+            for tid in range(len(X_test)):
+                res = {"model": artefacts.penalty, "# samples": n_samples,
+                       "tid": tid}
+                for scorer in ["r2", "pearsonr"]:
+                    score = artefacts.stuff_[scorer][ns][tid]
+                    res[scorer] = score
+                df.append(res)
+    return pd.DataFrame(df)
 
 
-def plot_dico(model, tag="sodl"):
-    dico_out_file = "%s_%s.nii.gz" % ( tag, dataset.replace(" ", "_"))
+def plot_dico(model, tag="sodl", close_figs=False):
+    import matplotlib.pyplot as plt
+    from nilearn.plotting import plot_stat_map
+    dico_out_file = "%s_%s.nii.gz" % (tag, dataset.replace(" ", "_"))
     unmask(model.components_, mask_img).to_filename(dico_out_file)
     print(dico_out_file)
     for c in range(0, n_components):
@@ -118,5 +165,9 @@ def plot_dico(model, tag="sodl"):
         plt.savefig(out_file, dpi=200, bbox_inches="tight", pad_inches=0)
         os.system("mogrify -trim %s" % out_file)
         print(out_file)
+        if close_figs:
+            plt.close("all")
+    if not close_figs:
+        plt.show()
 
 
