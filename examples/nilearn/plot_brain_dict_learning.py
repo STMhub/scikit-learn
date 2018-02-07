@@ -20,10 +20,11 @@ from datasets import load_hcp_rest, load_imgs, fetch_hcp_task
 
 random_state = 42
 n_components = 40
+batch_size = 30
 bcd_n_iter = 1
-n_epochs = 1
+n_epochs = 2
 dict_alpha = 100.
-dataset = os.environ.get("DATASET", "IBC bold")
+dataset = os.environ.get("DATASET", "IBC zmaps")
 n_jobs = os.environ.get("N_JOBS", None)
 if n_jobs is None:
     if "parietal" in os.environ["HOME"]:
@@ -32,10 +33,14 @@ if n_jobs is None:
         n_jobs = 1
 else:
     n_jobs = int(n_jobs)
+if dataset == "IBC bold":
+    n_components = 100
+    batch_size = 100
+if dataset == "HCP bold":
+    batch_size = 200
 
 
 def get_data(dataset):
-    batch_size = 30
     train_size = .75
     if dataset == "HCP zmaps":
         mask_img = os.path.join(data_dir, hcp_distro, "mask_img.nii.gz")
@@ -48,7 +53,6 @@ def get_data(dataset):
             test_size=0.)
         rs_filenames = np.concatenate(rs_filenames)
         X = [xs for Xs in rs_filenames for xs in np.load(Xs, mmap_mode='r')[::6]]
-        batch_size = 200
         if train_size is None:
             train_size = .1
     elif dataset == "IBC zmaps":
@@ -61,7 +65,6 @@ def get_data(dataset):
         mask_img = os.path.join(root, "storage/store/data/ibc/derivatives/group",
                                 "mask.nii.gz")
     elif dataset == "IBC bold":
-        batch_size = 50
         mask_img = os.path.join(root, "storage/store/data/ibc/derivatives/group",
                                 "mask.nii.gz")
         X = glob.glob(os.path.join(root, "storage/store/data/ibc/derivatives",
@@ -71,10 +74,10 @@ def get_data(dataset):
         raise NotImplementedError(dataset)
     mask_img = check_niimg(mask_img)
     X_train, X_test = train_test_split(X, train_size=train_size)
-    return X_train, X_test, mask_img, batch_size
+    return X_train, X_test, mask_img
 
 
-X_train, X_test, mask_img, batch_size = get_data(dataset)
+X_train, X_test, mask_img = get_data(dataset)
 artefacts = dict(components=[], codes=[], r2=[], pearsonr=[])
 
 
@@ -115,7 +118,7 @@ social_prox = ProximalOperator(which="graph-net", affine=mask_img.affine,
                                fwhm=2, mask=mask_img.get_data().astype(bool),
                                kernel="gaussian", radius=10.)
 all_artefacts = []
-for dict_alpha, prox, tag in zip([100., 1.], [-1, sodl_prox],
+for dict_alpha, prox, tag in zip([100., 10.], [-1, sodl_prox],
                                  ["L1", "Graph-Net"]):
     artefacts = Artefacts(tag)
     model = ProximalfMRIMiniBatchDictionaryLearning(

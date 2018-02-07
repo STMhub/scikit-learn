@@ -2,7 +2,7 @@ from functools import partial
 import numpy as np
 from sklearn.base import clone
 from sklearn.externals.joblib import Memory
-from sklearn.utils import gen_batches
+from sklearn.utils import gen_batches, check_random_state
 from sklearn.utils.validation import check_is_fitted
 from sklearn.decomposition import MiniBatchDictionaryLearning
 from nilearn._utils.compat import _basestring
@@ -99,8 +99,10 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
         cb_freq = max(1, n_iter // self.learning_curve_nticks)
 
         # loop over data and incrementally fit the model
+        rng = check_random_state(self.random_state)
         for epoch in range(self.n_epochs):
             cnt = 0
+            rng.shuffle(data)  # this is important for fast convergence
             for batch in batches:
                 # update model on incoming mini batch of data
                 cnt += 1
