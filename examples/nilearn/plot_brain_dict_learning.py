@@ -23,7 +23,7 @@ n_components = 40
 bcd_n_iter = 1
 n_epochs = 1
 dict_alpha = 100.
-dataset = os.environ.get("DATASET", "IBC zmaps")
+dataset = os.environ.get("DATASET", "IBC bold")
 n_jobs = os.environ.get("N_JOBS", None)
 if n_jobs is None:
     if "parietal" in os.environ["HOME"]:
@@ -61,6 +61,7 @@ def get_data(dataset):
         mask_img = os.path.join(root, "storage/store/data/ibc/derivatives/group",
                                 "mask.nii.gz")
     elif dataset == "IBC bold":
+        batch_size = 50
         mask_img = os.path.join(root, "storage/store/data/ibc/derivatives/group",
                                 "mask.nii.gz")
         X = glob.glob(os.path.join(root, "storage/store/data/ibc/derivatives",
