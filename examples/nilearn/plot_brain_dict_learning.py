@@ -22,6 +22,7 @@ from datasets import load_hcp_rest, load_imgs, fetch_hcp_task
 def bundle_up(X, batch_size):
     X = [img for Xs in X for img in Xs]
     n_files = len(X)
+    batch_size = min(n_files, batch_size)
     tmp = []
     for i in range(n_files // batch_size):
         tmp.append(X[i * batch_size: (i + 1) * batch_size])
@@ -117,23 +118,19 @@ class Artifacts(object):
         codes = []
         X_test_bundle = X_test
         if "zmaps" in dataset:
-            X_test_bundle = bundle_up(X_test, batch_size)
+            X_test_bundle = bundle_up(X_test, 10 * batch_size)
         for Xs in X_test_bundle:
             codes.append(model.transform(Xs))
-        self.compute_scores(codes, components)
+        self.compute_scores(X_test_bundle, codes, components)
         lost = time.time() - now
         self.t0_ += lost
         self.durations_.append(time.time() - self.t0_)
         # self.components_.append(components)
         # self.codes_.append(codes)
 
-    def compute_scores(self, record_codes, components):
+    def compute_scores(self, record_data, record_codes, components):
         record_scores = dict(r2=[])
-        X_test_bundle = X_test
-        if "zmaps" in dataset:
-            X_test_bundle = bundle_up(X_test, batch_size)
-
-        for Xs, codes in zip(X_test_bundle, record_codes):
+        for Xs, codes in zip(record_data, record_codes):
             Xs = self.model_._load_data(Xs)
             Xs_pred = np.dot(codes, components)
             for scorer in ["r2"]:
@@ -141,7 +138,7 @@ class Artifacts(object):
                     delayed(score_multioutput)(
                         x_true, x_pred, scorer=scorer)
                     for x_true, x_pred in zip(Xs, Xs_pred))
-                record_scores[scorer].append(scores)
+                record_scores[scorer] += scores
         for scorer in record_scores:
             self.scores_[scorer].append(record_scores[scorer])
 
