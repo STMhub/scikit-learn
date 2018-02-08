@@ -78,7 +78,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
                 n_components=self.n_components, random_state=self.random_state,
                 verbose=self.verbose, updater=updater, ensure_nonzero=True,
                 fit_algorithm=self.fit_algorithm, dict_init=self.dict_init,
-                n_iter=1, **dico_extra_params)
+                n_jobs=self.n_jobs, n_iter=1, **dico_extra_params)
 
     def from_niigz(self, components_img, imgs=None):
         self._prefit(imgs=imgs)
@@ -136,9 +136,12 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
 
                     # invoke user-supplied callback
                     if self.callback is not None:
-                        if (cnt % cb_freq == 0 or
-                            cnt == n_iter - 1) or epoch == 0 and cnt < 3:
+                        if cnt % cb_freq == 0 or epoch == 0 and cnt < 3:
                             self.callback(locals())
+
+        # just in case we missed some data
+        if self.callback is not None:
+            self.callback(locals())
 
         # final sip
         self.components_ = self.dico_.components_
