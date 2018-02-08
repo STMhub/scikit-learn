@@ -26,7 +26,9 @@ def bundle_up(X, batch_size):
     tmp = []
     for i in range(n_files // batch_size):
         tmp.append(X[i * batch_size: (i + 1) * batch_size])
-    tmp.append(X[(i + 1) * batch_size:])
+    remainder = X[(i + 1) * batch_size:]
+    if len(remainder):
+        tmp.append(remainder)
     return tmp
 
 
@@ -34,7 +36,7 @@ random_state = 42
 n_components = 40
 batch_size = 50
 bcd_n_iter = 1
-n_epochs = 2
+n_epochs = 1
 dict_alpha = 100.
 dataset = os.environ.get("DATASET", "HCP zmaps")
 n_jobs = os.environ.get("N_JOBS", None)
@@ -59,6 +61,7 @@ def get_data(dataset):
     train_size = .75
     misc = {}
     if dataset == "HCP zmaps":
+        train_size = .95
         mask_img = os.path.join(data_dir, hcp_distro, "mask_img.nii.gz")
         zmaps = fetch_hcp_task(os.path.join(data_dir, hcp_distro))
         X = zmaps.groupby(
@@ -86,8 +89,6 @@ def get_data(dataset):
         X = glob.glob(os.path.join(root, "storage/store/data/ibc/derivatives",
                                    "sub-*/ses-05/func/wrdcsub-*_bold.npy"))
         X = load_imgs(X)
-        misc["trs"] = list(map(len, X))
-        X = [img for Xs in X for img in Xs]
     else:
         raise NotImplementedError(dataset)
     mask_img = check_niimg(mask_img)
@@ -96,6 +97,7 @@ def get_data(dataset):
 
 
 X_train, X_test, mask_img, misc = get_data(dataset)
+n_subjects = len(X_train)
 if "zmaps" in dataset:
     X_train = bundle_up(X_train, batch_size)
 
@@ -121,17 +123,18 @@ class Artifacts(object):
             X_test_bundle = bundle_up(X_test, 10 * batch_size)
         for Xs in X_test_bundle:
             codes.append(model.transform(Xs))
-        self.compute_scores(X_test_bundle, codes, components)
+        self.compute_scores(X_test_bundle, codes, components, model)
         lost = time.time() - now
         self.t0_ += lost
         self.durations_.append(time.time() - self.t0_)
         # self.components_.append(components)
         # self.codes_.append(codes)
 
-    def compute_scores(self, record_data, record_codes, components):
+    def compute_scores(self, record_data, record_codes, components,
+                       model):
         record_scores = dict(r2=[])
         for Xs, codes in zip(record_data, record_codes):
-            Xs = self.model_._load_data(Xs)
+            Xs = model._load_data(Xs)
             Xs_pred = np.dot(codes, components)
             for scorer in ["r2"]:
                 scores = Parallel(n_jobs=n_jobs)(
@@ -149,7 +152,7 @@ graphnet_prox = ProximalOperator(which="graph-net", affine=mask_img.affine,
                                  radius=10., l1_ratio=.1)
 social_prox = ProximalOperator(which="social", affine=mask_img.affine,
                                fwhm=2, mask=mask_img.get_data().astype(bool),
-                               kernel="gaussian", radius=10.)
+                               kernel="gaussian")
 all_artifacts = []
 for penalty in penalties:
     if penalty == "social":
@@ -182,17 +185,21 @@ def create_results_df():
     time_df = []
     for artifacts in all_artifacts:
         n_heartbeat = len(artifacts.scores_["r2"])
+        if dataset == "HCP zmaps":
+            n_subjects = 362
+        else:
+            n_subjects = len(X_train)
         for ns in range(n_heartbeat):
             n_samples = int(
-                np.ceil((ns + 1) * len(X_train) / float(n_heartbeat)))
+                np.ceil((ns + 1) * n_subjects / float(n_heartbeat)))
             time_df.append(dict(model=artifacts.penalty,
                                 n_samples=n_samples,
                                 duration=artifacts.durations_[ns]))
             for tid in range(len(X_test)):
                 res = {"model": artifacts.penalty, "n_samples": n_samples,
                        "tid": tid}
-                for scorer in ["r2", "pearsonr"]:
-                    score = artifacts.scores_[scorer][ns][tid]
+                for scorer in ["r2"]:
+                    score = artifacts.scores_[scorer][ns][0][tid][0]
                     res[scorer] = score
                 scores_df.append(res)
     return pd.DataFrame(scores_df), pd.DataFrame(time_df)
@@ -218,14 +225,14 @@ def plot_results(scores_df, timing_df=None, output_dir="unknown_dataset",
             return model
 
     n_samples = scores_df["n_samples"].unique().tolist()
-    n_samples = n_samples[:3] + n_samples[4:][::-5]
+    n_samples = n_samples[:3] + n_samples[4:][::-4]
     scores_df = scores_df[scores_df.n_samples.isin(n_samples)]
     scores_df["penalty model"] = scores_df["model"].apply(rename_model)
     hue_order = ["L1 constraint", "social sparsity", "Graph-Net"]
     _, ax = plt.subplots(figsize=figsize)
     sns.pointplot(data=scores_df, x="n_samples", y="r2", hue="penalty model",
                   hue_order=hue_order, ax=ax)
-    plt.xlabel("# samples (3D MRI images)")
+    plt.xlabel("# subjects")
     plt.ylabel("$R^2$ score")
     plt.tight_layout()
     if output_dir is not None:
@@ -235,13 +242,13 @@ def plot_results(scores_df, timing_df=None, output_dir="unknown_dataset",
     if timing_df is not None:
         timing_df = timing_df[timing_df.n_samples.isin(n_samples)]
         timing_df["penalty model"] = timing_df["model"].apply(rename_model)
-        # timing_df["duration_minutes"] = timing_df["duration"] / 60.
+        timing_df["duration_minutes"] = timing_df["duration"] / 60.
         _, ax = plt.subplots(figsize=figsize)
-        sns.pointplot(data=timing_df, x="n_samples", y="duration",
+        sns.pointplot(data=timing_df, x="n_samples", y="duration_minutes",
                       hue="penalty model", hue_order=hue_order, ax=ax)
         ax.legend_.remove()
-        plt.ylabel("time (seconds)")
-        plt.xlabel("# samples (3D MRI images)")
+        plt.ylabel("time (minutes)")
+        plt.xlabel("# subjects")
         plt.tight_layout()
         if output_dir is not None:
             out_file = os.path.join(output_dir, "lc_timing_%s.png" % dataset)
@@ -249,21 +256,26 @@ def plot_results(scores_df, timing_df=None, output_dir="unknown_dataset",
             print(out_file)
 
 
-def plot_dico(components_img, tag="sodl", close_figs=False,
-              output_dir="."):
+def plot_dico(model, dataset, tag="L1", display_mode="yz",
+              close_figs=False, output_dir="."):
     import matplotlib.pyplot as plt
     from nilearn.plotting import plot_stat_map
     from nilearn.image.image import iter_img
+
     output_dir = os.path.abspath(output_dir)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    dico_out_file = os.path.join(
-        output_dir, "%s_%s.nii.gz" % (tag, dataset.replace(" ", "_")))
-    print(dico_out_file)
+
+    if hasattr(model, "components_"):
+        components_img = unmask(model.components_, mask_img)
+        dico_out_file = os.path.join(
+            output_dir, "%s_%s.nii.gz" % (tag, dataset.replace(" ", "_")))
+        components_img.to_filename(dico_out_file)
+        print(dico_out_file)
+    else:
+        components_img = check_niimg(model)
     for c, c_img in enumerate(iter_img(components_img)):
-        if c == 3:
-            continue
-        plot_stat_map(c_img, display_mode="ortho", colorbar=False,
+        plot_stat_map(c_img, colorbar=False, display_mode=display_mode,
                       black_bg=True)
         out_file = os.path.join(
             output_dir, "%s_%s_comp%02i.png" % (
@@ -275,5 +287,4 @@ def plot_dico(components_img, tag="sodl", close_figs=False,
             plt.close("all")
     if not close_figs:
         plt.show()
-
 
