@@ -18,6 +18,17 @@ from feature_extraction import _enet_coder
 from utils import score_multioutput
 from datasets import load_hcp_rest, load_imgs, fetch_hcp_task
 
+
+def bundle_up(X, batch_size):
+    X = [img for Xs in X for img in Xs]
+    n_files = len(X)
+    tmp = []
+    for i in range(n_files // batch_size):
+        tmp.append(X[i * batch_size: (i + 1) * batch_size])
+    tmp.append(X[(i + 1) * batch_size:])
+    return tmp
+
+
 random_state = 42
 n_components = 40
 batch_size = 50
@@ -85,15 +96,8 @@ def get_data(dataset):
 
 X_train, X_test, mask_img, misc = get_data(dataset)
 if "zmaps" in dataset:
-    X_train = [img for Xs in X_train for img in Xs]
-    n_files = len(X_train)
-    tmp = []
-    for i in range(n_files // batch_size):
-        tmp.append(X_train[i * batch_size: (i + 1) * batch_size])
-    tmp.append(X_train[(i + 1) * batch_size:])
-    X_train = tmp
-if "zmaps" in dataset:
-    X_test_flat = [img for Xs in X_test for img in Xs]
+    X_train = bundle_up(X_train, batch_size)
+
 
 class Artifacts(object):
     def __init__(self, penalty):
@@ -113,7 +117,7 @@ class Artifacts(object):
         codes = []
         X_test_bundle = X_test
         if "zmaps" in dataset:
-            X_test_bundle = [[img for Xs in X_test for img in Xs]]
+            X_test_bundle = bundle_up(X_test, batch_size)
         for Xs in X_test_bundle:
             codes.append(model.transform(Xs))
         self.compute_scores(codes, components)
@@ -127,7 +131,7 @@ class Artifacts(object):
         record_scores = dict(r2=[])
         X_test_bundle = X_test
         if "zmaps" in dataset:
-            X_test_bundle = [[img for Xs in X_test for img in Xs]]
+            X_test_bundle = bundle_up(X_test, batch_size)
 
         for Xs, codes in zip(X_test_bundle, record_codes):
             Xs = self.model_._load_data(Xs)
