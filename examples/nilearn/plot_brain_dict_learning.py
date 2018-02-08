@@ -32,13 +32,14 @@ def bundle_up(X, batch_size):
     return tmp
 
 
+benchmark = False
 random_state = 42
 n_components = 40
 batch_size = 50
 bcd_n_iter = 1
 n_epochs = 1
 dict_alpha = 100.
-dataset = os.environ.get("DATASET", "HCP zmaps")
+dataset = os.environ.get("DATASET", "HCP rest")
 n_jobs = os.environ.get("N_JOBS", None)
 penalties = ["L1", "social", "Graph-Net"]
 if n_jobs is None:
@@ -51,17 +52,21 @@ else:
 if dataset == "IBC bold":
     n_components = 100
     batch_size = 100
-    penalties = ["L1", "social"]
-if dataset == "HCP bold":
+    penalties = ["L1"]
+if dataset == "HCP rest":
     batch_size = 200
-    penalties = ["L1", "social"]
+    penalties = ["L1"]
 
 
 def get_data(dataset):
-    train_size = .75
+    if benchmark:
+        train_size = .75
+    else:
+        train_size = 1.
     misc = {}
     if dataset == "HCP zmaps":
-        train_size = .95
+        if benchmark:
+            train_size = .95
         mask_img = os.path.join(data_dir, hcp_distro, "mask_img.nii.gz")
         zmaps = fetch_hcp_task(os.path.join(data_dir, hcp_distro))
         X = zmaps.groupby(
@@ -70,10 +75,10 @@ def get_data(dataset):
         rs_filenames, _, mask_img = load_hcp_rest(
             data_dir=os.path.join(data_dir, hcp_distro), raw=True,
             test_size=0.)
-        rs_filenames = np.concatenate(rs_filenames)
-        X = [xs for Xs in rs_filenames for xs in np.load(Xs, mmap_mode='r')[::6]]
-        if train_size is None:
-            train_size = .1
+        X = np.concatenate(rs_filenames)
+        X = [Xs for Xs in X if os.path.exists(Xs)]
+        if benchmark:
+            train_size = .8
     elif dataset == "IBC zmaps":
         zmap_file_pattern = os.path.join(root,
                                          "storage/store/data/ibc",
@@ -149,7 +154,8 @@ class Artifacts(object):
 coder = partial(_enet_coder, l1_ratio=0., alpha=1.)
 graphnet_prox = ProximalOperator(which="graph-net", affine=mask_img.affine,
                                  mask=mask_img.get_data().astype(bool),
-                                 radius=10., l1_ratio=.1)
+                                 radius=10., l1_ratio=.1, max_iter=1,
+                                 verbose=0)
 social_prox = ProximalOperator(which="social", affine=mask_img.affine,
                                fwhm=2, mask=mask_img.get_data().astype(bool),
                                kernel="gaussian")
@@ -157,7 +163,7 @@ all_artifacts = []
 for penalty in penalties:
     if penalty == "social":
         prox = social_prox
-        dict_alpha = 100.
+        dict_alpha = 1.
     elif penalty == "L1":
         prox = -1
         dict_alpha = 100.
@@ -170,7 +176,8 @@ for penalty in penalties:
     model = ProximalfMRIMiniBatchDictionaryLearning(
         n_components=n_components, random_state=random_state,
         fit_algorithm=coder, dict_penalty_model=prox, mask=mask_img,
-        n_epochs=n_epochs, callback=artifacts.callback, n_jobs=n_jobs,
+        n_epochs=n_epochs,  # callback=artifacts.callback,
+        n_jobs=n_jobs,
         batch_size=batch_size, dict_alpha=dict_alpha, verbose=1)
     artifacts.model_ = model
     # model.from_niigz("sodl_ibc_bold_100.nii.gz")

@@ -53,7 +53,9 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
     def _load_data(self, data, confounds=None, ensure_2d=False):
         if isinstance(data[0], np.ndarray):
             return data
-        if isinstance(data[0], _basestring) and data[0].endswith(".npy"):
+        if isinstance(data, _basestring) and data.endswith(".npy"):
+            return load_imgs([data])[0]
+        elif isinstance(data[0], _basestring) and data[0].endswith(".npy"):
             return load_imgs(data)
         else:
             return mask_and_reduce(
@@ -116,6 +118,8 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
             cnt = 0
             rng.shuffle(data)  # this is important for fast convergence
             for s, record_data in enumerate(data):
+                if isinstance(record_data, _basestring):
+                    record_data = self._load_data(record_data)
                 record_data[::self.reduction_factor]
                 batch_size = min(self.batch_size, len(record_data))
                 batches = list(gen_batches(len(record_data), batch_size))
@@ -167,7 +171,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
             dico = clone(self.dico_)
             dico.components_ = components
         if isinstance(imgs, _basestring):
-            imgs = [imgs]
+            imgs = self._load_data(imgs)
         n_imgs = len(imgs)
         n_components = len(dico.components_)
         codes = np.ndarray((n_imgs, n_components),
