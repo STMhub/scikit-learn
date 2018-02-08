@@ -8,6 +8,7 @@ from sklearn.decomposition import MiniBatchDictionaryLearning
 from nilearn._utils.compat import _basestring
 from nilearn.decomposition import (DictLearning as
                                    fMRIMiniBatchDictionaryLearning)
+from nilearn.masking import apply_mask
 from nilearn.decomposition.dict_learning import BaseDecomposition
 from nilearn.decomposition.base import mask_and_reduce
 from sklearn.linear_model.coordescendant import L11_PENALTY
@@ -26,10 +27,10 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
                  target_shape=None, mask_strategy='epi', mask_args=None,
                  memory=Memory(cachedir=None), memory_level=0, n_jobs=1,
                  dict_penalty_model=L11_PENALTY, positive=True, batch_size=20,
-                 n_epochs=1, reduction_ratio=1., dict_init=None, alpha=1.,
-                 dict_alpha=1., fit_algorithm="lars", transform_algorithm=None,
-                 rescale_atoms=False, callback=None, learning_curve_nticks=10,
-                 verbose=0):
+                 n_epochs=1, reduction_ratio=1., reduction_factor=1,
+                 dict_init=None, alpha=1., dict_alpha=1., fit_algorithm="lars",
+                 transform_algorithm=None, rescale_atoms=False, callback=None,
+                 learning_curve_nticks=5, verbose=0):
         fMRIMiniBatchDictionaryLearning.__init__(
             self, n_components=n_components, random_state=random_state,
             mask=mask, smoothing_fwhm=smoothing_fwhm, standardize=standardize,
@@ -47,23 +48,49 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
         self.rescale_atoms = rescale_atoms
         self.callback = callback
         self.learning_curve_nticks = learning_curve_nticks
+        self.reduction_factor = reduction_factor
 
-    def _load_data(self, data, confounds=None):
-        if isinstance(data[0], _basestring):
-            if data[0].endswith(".npy"):
-                return load_imgs(data)
-            else:
-                return mask_and_reduce(
-                    self.masker_, data, confounds,  n_jobs=self.n_jobs,
-                    reduction_ratio=self.reduction_ratio,
-                    n_components=self.n_components,
-                    random_state=self.random_state,
-                    memory_level=max(0, self.memory_level - 1))
+    def _load_data(self, data, confounds=None, ensure_2d=False):
+        if isinstance(data[0], np.ndarray):
+            return data
+        if isinstance(data[0], _basestring) and data[0].endswith(".npy"):
+            return load_imgs(data)
         else:
-            return np.asarray(data)
+            return mask_and_reduce(
+                self.masker_, data, confounds,  n_jobs=self.n_jobs,
+                reduction_ratio=self.reduction_ratio,
+                n_components=self.n_components,
+                random_state=self.random_state,
+                memory_level=max(0, self.memory_level - 1))
+
+    def _prefit(self, imgs=None):
+        if imgs is not None:
+            BaseDecomposition.fit(self, imgs)
+        dico_extra_params = {}
+        updater = partial(_general_update_dict, reg=self.dict_alpha,
+                          penalty_model=self.dict_penalty_model,
+                          positive=self.positive)
+        for param in ["transform_algorithm"]:
+            if hasattr(self, param) and getattr(self, param) is not None:
+                dico_extra_params[param] = getattr(self, param)
+        if not hasattr(self, "dico_"):  # warm-start maybe
+            self.dico_ = MiniBatchDictionaryLearning(
+                n_components=self.n_components, random_state=self.random_state,
+                verbose=self.verbose, updater=updater, ensure_nonzero=True,
+                fit_algorithm=self.fit_algorithm, dict_init=self.dict_init,
+                n_iter=1, **dico_extra_params)
+
+    def from_niigz(self, components_img, imgs=None):
+        self._prefit(imgs=imgs)
+        if imgs is None:
+            self.dico_.components_ = apply_mask(components_img, self.mask)
+        else:
+            self.dico_.components_ = self.masker_.transform(components_img)
+        self.components_ = self.dico_.components_
+        return self
 
     def fit(self, imgs, y=None, confounds=None):
-        BaseDecomposition.fit(self, imgs)
+        self._prefit(imgs)
         return self._raw_fit(imgs)
 
     def _log(self, msg):
@@ -79,43 +106,39 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
             Shape (n_samples, n_features)
         """
         # misc
-        updater = partial(_general_update_dict, reg=self.dict_alpha,
-                          penalty_model=self.dict_penalty_model,
-                          positive=self.positive)
-        dico_extra_params = {}
-        for param in ["transform_algorithm"]:
-            if hasattr(self, param) and getattr(self, param) is not None:
-                dico_extra_params[param] = getattr(self, param)
-        if not hasattr(self, "dico_"):  # warm-start maybe
-            self.dico_ = MiniBatchDictionaryLearning(
-                n_components=self.n_components, random_state=self.random_state,
-                verbose=self.verbose, updater=updater, ensure_nonzero=True,
-                fit_algorithm=self.fit_algorithm, dict_init=self.dict_init,
-                n_iter=1, **dico_extra_params)
-        n_samples = len(data)
-        batch_size = min(n_samples, self.batch_size)
-        batches = list(gen_batches(len(data), batch_size))
-        n_iter = len(batches)
-        cb_freq = max(1, n_iter // self.learning_curve_nticks)
+        n_records = len(data)
+        self._prefit()
 
         # loop over data and incrementally fit the model
         rng = check_random_state(self.random_state)
+        cb_freq = None
         for epoch in range(self.n_epochs):
             cnt = 0
             rng.shuffle(data)  # this is important for fast convergence
-            for batch in batches:
-                # update model on incoming mini batch of data
-                cnt += 1
-                self._log('Epoch %02i/%02i, batch %02i/%02i' % (
-                    epoch + 1, self.n_epochs, cnt, n_iter))
-                data_batch = self._load_data(data[batch])
-                self.dico_.partial_fit(data_batch)
+            for s, record_data in enumerate(data):
+                record_data[::self.reduction_factor]
+                batch_size = min(self.batch_size, len(record_data))
+                batches = list(gen_batches(len(record_data), batch_size))
+                n_iter = len(batches)
+                if cb_freq is None:
+                    cb_freq = max(
+                        n_iter * n_records // self.learning_curve_nticks, 1)
+                rng.shuffle(batches)
+                for b, batch in enumerate(batches):
+                    # update model on incoming mini batch of data
+                    cnt += 1
+                    self._log(
+                        'Epoch %02i/%02i record %02i/%02i batch %02i/%02i' % (
+                            epoch + 1, self.n_epochs, s + 1, n_records, b + 1,
+                            n_iter))
+                    data_batch = self._load_data(record_data[batch])
+                    self.dico_.partial_fit(data_batch)
 
-                # invoke user-supplied callback
-                if self.callback is not None:
-                    if (cnt % cb_freq == 0 or
-                        cnt == n_iter - 1):
-                        self.callback(locals())
+                    # invoke user-supplied callback
+                    if self.callback is not None:
+                        if (cnt % cb_freq == 0 or
+                            cnt == n_iter - 1) or epoch == 0 and cnt < 3:
+                            self.callback(locals())
 
         # final sip
         self.components_ = self.dico_.components_

@@ -26,7 +26,7 @@ def nrm2(w, squared=False):
     return ww if squared else sqrt(ww)
 
 
-def prox_l1_slow(w, reg, ajj):
+def prox_l1_slow(w, reg, ajj=1.):
     """Soft-thresholding operator"""
     if ajj == 0.:
         w[:] = 0.
@@ -39,7 +39,7 @@ def prox_l1_slow(w, reg, ajj):
     return w
 
 
-def proj_l1_slow(w, reg, ajj, l1_ratio=1.):
+def proj_l1_slow(w, reg, ajj=1., l1_ratio=1.):
     """Projection onto L1 ball"""
     if ajj == 0. or reg == 0.:
         w[:] = 0.
@@ -51,7 +51,7 @@ def proj_l1_slow(w, reg, ajj, l1_ratio=1.):
         w[:] = out
 
 
-def proj_l2_slow(w, reg, ajj):
+def proj_l2_slow(w, reg, ajj=1.):
     """Projection onto L1 ball"""
     if ajj == 0.:
         w[:] = 0.
@@ -66,7 +66,7 @@ def proj_l2_slow(w, reg, ajj):
     return w
 
 
-def prox_l2_slow(w, reg, ajj):
+def prox_l2_slow(w, reg, ajj=1.):
     """Proximal operator of L2 norm"""
     if ajj == 0.:
         w[:] = 0.

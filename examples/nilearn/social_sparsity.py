@@ -161,12 +161,9 @@ def _social_sparsity_alpha_grid(grad_loss, mask, fwhm, eps=1e-3,
     imgs = np.zeros((len(grad_loss),) + mask.shape, dtype=grad_loss.dtype)
     imgs[:, mask] = grad_loss
     sigma = _fwhm2sigma(fwhm, voxel_size=voxel_size, affine=affine)
-    grp_norms_squared  = [_grp_norms_squared(img, sigma,
-                                             side_weights=side_weights,
-                                             kernel=kernel, mode=mode,
-                                             cval=cval,
-                                             n_resolutions=n_resolutions)
-                         for img in imgs]
+    grp_norms_squared = [_grp_norms_squared(
+        img, sigma, side_weights=side_weights, kernel=kernel, mode=mode,
+        cval=cval, n_resolutions=n_resolutions) for img in imgs]
     alpha_max = np.sqrt(np.max(grp_norms_squared))
 
     if n_alphas == 1:
@@ -177,8 +174,8 @@ def _social_sparsity_alpha_grid(grad_loss, mask, fwhm, eps=1e-3,
 
 
 if __name__ == "__main__":
-    import matplotlib.pyplot as plt    
-    from sklearn.utils import check_random_state    
+    import matplotlib.pyplot as plt
+    from sklearn.utils import check_random_state
     from nilearn.decoding.proximal_operators import _prox_tvl1
     from nilearn.plotting.cm import cold_hot
 
