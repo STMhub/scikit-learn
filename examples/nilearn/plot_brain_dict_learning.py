@@ -18,6 +18,17 @@ from feature_extraction import _enet_coder
 from utils import score_multioutput
 from datasets import load_hcp_rest, load_imgs, fetch_hcp_task
 
+
+def bundle_up(X, batch_size):
+    X = [img for Xs in X for img in Xs]
+    n_files = len(X)
+    tmp = []
+    for i in range(n_files // batch_size):
+        tmp.append(X[i * batch_size: (i + 1) * batch_size])
+    tmp.append(X[(i + 1) * batch_size:])
+    return tmp
+
+
 random_state = 42
 n_components = 40
 batch_size = 50
@@ -49,7 +60,8 @@ def get_data(dataset):
     if dataset == "HCP zmaps":
         mask_img = os.path.join(data_dir, hcp_distro, "mask_img.nii.gz")
         zmaps = fetch_hcp_task(os.path.join(data_dir, hcp_distro))
-        X = zmaps.groupby("subject_id")["zmap"].apply(list).tolist()
+        X = zmaps.groupby(
+            "subject_id")["zmap"].apply(list).tolist()
     elif dataset == "HCP rest":
         rs_filenames, _, mask_img = load_hcp_rest(
             data_dir=os.path.join(data_dir, hcp_distro), raw=True,
@@ -84,16 +96,10 @@ def get_data(dataset):
 
 X_train, X_test, mask_img, misc = get_data(dataset)
 if "zmaps" in dataset:
-    X_train = [img for Xs in X_train for img in Xs]
-    n_files = len(X_train)
-    tmp = []
-    for i in range(n_files // batch_size):
-        tmp.append(X_train[i * batch_size: (i + 1) * batch_size])
-    tmp.append(X_train[(i + 1) * batch_size:])
-    X_train = tmp
+    X_train = bundle_up(X_train, batch_size)
 
 
-class Artefacts(object):
+class Artifacts(object):
     def __init__(self, penalty):
         self.penalty = penalty
         self.durations_ = []
@@ -104,18 +110,30 @@ class Artefacts(object):
 
     def callback(self, env):
         self.durations_.append(time.time() - self.t0_)
+        now = time.time()
+        print("\n[Artifacts] Computing test scores")
         model = env["self"]
-        components = model.dico_.components_.copy()
-        record_codes = []
-        for Xs in X_test:
-            record_codes.append(model.transform(Xs))
-        self.compute_scores(record_codes, components)
+        components = model.dico_.components_
+        codes = []
+        X_test_bundle = X_test
+        if "zmaps" in dataset:
+            X_test_bundle = bundle_up(X_test, batch_size)
+        for Xs in X_test_bundle:
+            codes.append(model.transform(Xs))
+        self.compute_scores(codes, components)
+        lost = time.time() - now
+        self.t0_ += lost
+        self.durations_.append(time.time() - self.t0_)
         # self.components_.append(components)
         # self.codes_.append(codes)
 
     def compute_scores(self, record_codes, components):
         record_scores = dict(r2=[])
-        for Xs, codes in zip(X_test, record_codes):
+        X_test_bundle = X_test
+        if "zmaps" in dataset:
+            X_test_bundle = bundle_up(X_test, batch_size)
+
+        for Xs, codes in zip(X_test_bundle, record_codes):
             Xs = self.model_._load_data(Xs)
             Xs_pred = np.dot(codes, components)
             for scorer in ["r2"]:
@@ -135,7 +153,7 @@ graphnet_prox = ProximalOperator(which="graph-net", affine=mask_img.affine,
 social_prox = ProximalOperator(which="social", affine=mask_img.affine,
                                fwhm=2, mask=mask_img.get_data().astype(bool),
                                kernel="gaussian", radius=10.)
-all_artefacts = []
+all_artifacts = []
 for penalty in penalties:
     if penalty == "social":
         prox = social_prox
@@ -148,36 +166,36 @@ for penalty in penalties:
     else:
         raise NotImplementedError(penalty)
 
-    artefacts = Artefacts(penalty)
+    artifacts = Artifacts(penalty)
     model = ProximalfMRIMiniBatchDictionaryLearning(
         n_components=n_components, random_state=random_state,
         fit_algorithm=coder, dict_penalty_model=prox, mask=mask_img,
-        n_epochs=n_epochs, callback=artefacts.callback, n_jobs=n_jobs,
+        n_epochs=n_epochs, callback=artifacts.callback, n_jobs=n_jobs,
         batch_size=batch_size, dict_alpha=dict_alpha, verbose=1)
-    artefacts.model_ = model
+    artifacts.model_ = model
     # model.from_niigz("sodl_ibc_bold_100.nii.gz")
-    artefacts.start_clock()
+    artifacts.start_clock()
     model.fit(X_train)
-    all_artefacts.append(artefacts)
+    all_artifacts.append(artifacts)
 
 
 def create_results_df():
     import pandas as pd
     scores_df = []
     time_df = []
-    for artefacts in all_artefacts:
-        n_heartbeat = len(artefacts.scores_["r2"])
+    for artifacts in all_artifacts:
+        n_heartbeat = len(artifacts.scores_["r2"])
         for ns in range(n_heartbeat):
             n_samples = int(
                 np.ceil((ns + 1) * len(X_train) / float(n_heartbeat)))
-            time_df.append(dict(model=artefacts.penalty,
+            time_df.append(dict(model=artifacts.penalty,
                                 n_samples=n_samples,
-                                duration=artefacts.durations_[ns]))
+                                duration=artifacts.durations_[ns]))
             for tid in range(len(X_test)):
-                res = {"model": artefacts.penalty, "n_samples": n_samples,
+                res = {"model": artifacts.penalty, "n_samples": n_samples,
                        "tid": tid}
                 for scorer in ["r2", "pearsonr"]:
-                    score = artefacts.scores_[scorer][ns][tid]
+                    score = artifacts.scores_[scorer][ns][tid]
                     res[scorer] = score
                 scores_df.append(res)
     return pd.DataFrame(scores_df), pd.DataFrame(time_df)
