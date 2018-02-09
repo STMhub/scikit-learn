@@ -6,7 +6,7 @@ from sklearn.linear_model.coordescendant import L2_CONSTRAINT, coordescendant
 def _general_update_dict(dictionary, B, A, precomputed=True,
                          solver=coordescendant, penalty_model=L2_CONSTRAINT,
                          reg=1., l2_reg=0., max_iter=1, positive=False,
-                         emulate_sklearn=False, random=False,
+                         emulate_sklearn=False, random=False, verbose=0,
                          random_state=None, reduction_ratio=1.):
     """Applies BCD dictionary-update for online dictionary-learning"""
     reg = float(reg)

@@ -31,7 +31,9 @@ def bundle_up(X, batch_size):
         tmp.append(remainder)
     return tmp
 
-
+output_dir = os.path.abspath(os.environ.get("OUTPUT_DIR", "."))
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
 benchmark = False
 random_state = 42
 n_components = 40
@@ -39,7 +41,7 @@ batch_size = 50
 bcd_n_iter = 1
 n_epochs = 1
 dict_alpha = 100.
-dataset = os.environ.get("DATASET", "HCP rest")
+dataset = os.environ.get("DATASET", "IBC bold")
 n_jobs = os.environ.get("N_JOBS", None)
 penalties = ["L1", "social", "Graph-Net"]
 if n_jobs is None:
@@ -49,12 +51,14 @@ if n_jobs is None:
         n_jobs = 1
 else:
     n_jobs = int(n_jobs)
+reduction_factor = None
 if dataset == "IBC bold":
     n_components = 100
-    batch_size = 100
     penalties = ["L1"]
 if dataset == "HCP rest":
+    n_components = 100
     batch_size = 200
+    reduction_factor = 6
     penalties = ["L1"]
 
 
@@ -62,7 +66,7 @@ def get_data(dataset):
     if benchmark:
         train_size = .75
     else:
-        train_size = 1.
+        train_size = None
     misc = {}
     if dataset == "HCP zmaps":
         if benchmark:
@@ -74,8 +78,10 @@ def get_data(dataset):
     elif dataset == "HCP rest":
         rs_filenames, _, mask_img = load_hcp_rest(
             data_dir=os.path.join(data_dir, hcp_distro), raw=True,
-            test_size=0.)
-        X = np.concatenate(rs_filenames)
+            test_size=0)
+        # X = np.concatenate(rs_filenames)
+        rs_filenames = rs_filenames[:100]
+        X = [files[0] for files in rs_filenames]
         X = [Xs for Xs in X if os.path.exists(Xs)]
         if benchmark:
             train_size = .8
@@ -92,12 +98,15 @@ def get_data(dataset):
         mask_img = os.path.join(root, "storage/store/data/ibc/derivatives/group",
                                 "mask.nii.gz")
         X = glob.glob(os.path.join(root, "storage/store/data/ibc/derivatives",
-                                   "sub-*/ses-05/func/wrdcsub-*_bold.npy"))
+                                   "sub-*/ses-*/func/wrdcsub-*_bold.npy"))
         X = load_imgs(X)
     else:
         raise NotImplementedError(dataset)
     mask_img = check_niimg(mask_img)
-    X_train, X_test = train_test_split(X, train_size=train_size)
+    if train_size is None:
+        X_train, X_test = X, []
+    else:
+        X_train, X_test = train_test_split(X, train_size=train_size)
     return X_train, X_test, mask_img, misc
 
 
@@ -150,40 +159,45 @@ class Artifacts(object):
         for scorer in record_scores:
             self.scores_[scorer].append(record_scores[scorer])
 
+if __name__ == "__main__":
+    coder = partial(_enet_coder, l1_ratio=0., alpha=1.)
+    graphnet_prox = ProximalOperator(which="graph-net", affine=mask_img.affine,
+                                     mask=mask_img.get_data().astype(bool),
+                                     radius=10., l1_ratio=.1, max_iter=1,
+                                     verbose=0)
+    social_prox = ProximalOperator(which="social", affine=mask_img.affine,
+                                   fwhm=2, mask=mask_img.get_data().astype(bool),
+                                   kernel="gaussian")
+    all_artifacts = []
+    for penalty in penalties:
+        if penalty == "social":
+            prox = social_prox
+            dict_alpha = 1.
+        elif penalty == "L1":
+            prox = -1
+            dict_alpha = 100.
+        elif penalty == "Graph-Net":
+            prox = graphnet_prox
+        else:
+            raise NotImplementedError(penalty)
 
-coder = partial(_enet_coder, l1_ratio=0., alpha=1.)
-graphnet_prox = ProximalOperator(which="graph-net", affine=mask_img.affine,
-                                 mask=mask_img.get_data().astype(bool),
-                                 radius=10., l1_ratio=.1, max_iter=1,
-                                 verbose=0)
-social_prox = ProximalOperator(which="social", affine=mask_img.affine,
-                               fwhm=2, mask=mask_img.get_data().astype(bool),
-                               kernel="gaussian")
-all_artifacts = []
-for penalty in penalties:
-    if penalty == "social":
-        prox = social_prox
-        dict_alpha = 1.
-    elif penalty == "L1":
-        prox = -1
-        dict_alpha = 100.
-    elif penalty == "Graph-Net":
-        prox = graphnet_prox
-    else:
-        raise NotImplementedError(penalty)
-
-    artifacts = Artifacts(penalty)
-    model = ProximalfMRIMiniBatchDictionaryLearning(
-        n_components=n_components, random_state=random_state,
-        fit_algorithm=coder, dict_penalty_model=prox, mask=mask_img,
-        n_epochs=n_epochs,  # callback=artifacts.callback,
-        n_jobs=n_jobs,
-        batch_size=batch_size, dict_alpha=dict_alpha, verbose=1)
-    artifacts.model_ = model
-    # model.from_niigz("sodl_ibc_bold_100.nii.gz")
-    artifacts.start_clock()
-    model.fit(X_train)
-    all_artifacts.append(artifacts)
+        artifacts = Artifacts(penalty)
+        model = ProximalfMRIMiniBatchDictionaryLearning(
+            n_components=n_components, random_state=random_state,
+            fit_algorithm=coder, dict_penalty_model=prox, mask=mask_img,
+            n_epochs=n_epochs,  # callback=artifacts.callback,
+            n_jobs=n_jobs, reduction_factor=reduction_factor,
+            batch_size=batch_size, dict_alpha=dict_alpha, verbose=1)
+        artifacts.model_ = model
+        # model.from_niigz("sodl_ibc_bold_100.nii.gz")
+        artifacts.start_clock()
+        model.fit(X_train)
+        all_artifacts.append(artifacts)
+        components_img = unmask(model.components_, mask_img)
+        dico_out_file = os.path.join(
+            output_dir, "%s_%s.nii.gz" % (penalty, dataset.replace(" ", "_")))
+        components_img.to_filename(dico_out_file)
+        print(dico_out_file)
 
 
 def create_results_df():
@@ -263,8 +277,7 @@ def plot_results(scores_df, timing_df=None, output_dir="unknown_dataset",
             print(out_file)
 
 
-def plot_dico(model, dataset, tag="L1", display_mode="yz",
-              close_figs=False, output_dir="."):
+def plot_dico(model, tag="L1", display_mode="yz", close_figs=False):
     import matplotlib.pyplot as plt
     from nilearn.plotting import plot_stat_map
     from nilearn.image.image import iter_img
@@ -275,10 +288,6 @@ def plot_dico(model, dataset, tag="L1", display_mode="yz",
 
     if hasattr(model, "components_"):
         components_img = unmask(model.components_, mask_img)
-        dico_out_file = os.path.join(
-            output_dir, "%s_%s.nii.gz" % (tag, dataset.replace(" ", "_")))
-        components_img.to_filename(dico_out_file)
-        print(dico_out_file)
     else:
         components_img = check_niimg(model)
     for c, c_img in enumerate(iter_img(components_img)):

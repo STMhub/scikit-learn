@@ -389,7 +389,8 @@ def _update_dict(dictionary, Y, code, verbose=False, return_r2=False,
                         overwrite_a=True)
     else:
         # update via home-brewed technology
-        dictionary = updater(dictionary, Y, code, precomputed=precomputed)
+        dictionary = updater(dictionary, Y, code, precomputed=precomputed,
+                             verbose=verbose)
 
         # handle dead atoms
         if ensure_nonzero:

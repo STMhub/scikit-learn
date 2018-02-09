@@ -120,7 +120,8 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
             for s, record_data in enumerate(data):
                 if isinstance(record_data, _basestring):
                     record_data = self._load_data(record_data)
-                record_data[::self.reduction_factor]
+                if self.reduction_factor is not None:
+                    record_data = record_data[::self.reduction_factor]
                 batch_size = min(self.batch_size, len(record_data))
                 batches = list(gen_batches(len(record_data), batch_size))
                 n_iter = len(batches)
