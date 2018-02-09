@@ -322,7 +322,7 @@ def sparse_encode(X, dictionary, gram=None, cov=None, algorithm='lasso_lars',
 
 def _update_dict(dictionary, Y, code, verbose=False, return_r2=False,
                  random_state=None, updater=None, precomputed=True,
-                 ensure_nonzero=True):
+                 n_jobs=1, ensure_nonzero=True):
     """Update the dense dictionary factor in place.
 
     Parameters
@@ -390,7 +390,7 @@ def _update_dict(dictionary, Y, code, verbose=False, return_r2=False,
     else:
         # update via home-brewed technology
         dictionary = updater(dictionary, Y, code, precomputed=precomputed,
-                             verbose=verbose)
+                             n_jobs=n_jobs, verbose=verbose)
 
         # handle dead atoms
         if ensure_nonzero:
@@ -571,11 +571,10 @@ def dict_learning(X, n_components, alpha, max_iter=100, tol=1e-8,
         code = sparse_encode(X, dictionary, algorithm=method, alpha=alpha,
                              init=code, n_jobs=n_jobs)
         # Update dictionary
-        dictionary, residuals = _update_dict(dictionary.T, X.T, code.T,
-                                             verbose=verbose, return_r2=True,
-                                             random_state=random_state,
-                                             updater=updater, precomputed=False,
-                                             ensure_nonzero=ensure_nonzero)
+        dictionary, residuals = _update_dict(
+            dictionary.T, X.T, code.T, verbose=verbose, return_r2=True,
+            random_state=random_state, updater=updater, n_jobs=n_jobs,
+            precomputed=False, ensure_nonzero=ensure_nonzero)
         dictionary = dictionary.T
 
         # Cost function
@@ -799,10 +798,10 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
         B += np.dot(this_X.T, this_code.T)
 
         # Update dictionary
-        dictionary = _update_dict(dictionary, B, A, verbose=verbose,
-                                  random_state=random_state,
-                                  updater=updater, precomputed=True,
-                                  ensure_nonzero=ensure_nonzero)
+        dictionary = _update_dict(
+            dictionary, B, A, verbose=verbose, random_state=random_state,
+            updater=updater, precomputed=True, ensure_nonzero=ensure_nonzero,
+            n_jobs=n_jobs)
         # XXX: Can the residuals be of any use?
 
         # Maybe we need a stopping criteria based on the amount of

@@ -15,7 +15,7 @@ sys.path.append(os.path.join(os.environ["HOME"],
                              "CODE/FORKED/elvis_dohmatob/rsfmri2tfmri"))
 from config import hcp_distro, data_dir, root
 from feature_extraction import _enet_coder
-from utils import score_multioutput
+# from utils import score_multioutput
 from datasets import load_hcp_rest, load_imgs, fetch_hcp_task
 
 
@@ -41,9 +41,10 @@ batch_size = 50
 bcd_n_iter = 1
 n_epochs = 1
 dict_alpha = 100.
-dataset = os.environ.get("DATASET", "IBC bold")
+dataset = os.environ.get("DATASET", "HCP rest")
 n_jobs = os.environ.get("N_JOBS", None)
 penalties = ["L1", "social", "Graph-Net"]
+n_jobs = 1
 if n_jobs is None:
     if "parietal" in os.environ["HOME"]:
         n_jobs = 20
@@ -53,12 +54,13 @@ else:
     n_jobs = int(n_jobs)
 reduction_factor = None
 if dataset == "IBC bold":
+    batch_size = 200
     n_components = 100
     penalties = ["L1"]
 if dataset == "HCP rest":
     n_components = 100
     batch_size = 200
-    reduction_factor = 6
+    # reduction_factor = 6
     penalties = ["L1"]
 
 
@@ -187,7 +189,8 @@ if __name__ == "__main__":
             fit_algorithm=coder, dict_penalty_model=prox, mask=mask_img,
             n_epochs=n_epochs,  # callback=artifacts.callback,
             n_jobs=n_jobs, reduction_factor=reduction_factor,
-            batch_size=batch_size, dict_alpha=dict_alpha, verbose=1)
+            batch_size=batch_size, dict_alpha=dict_alpha, verbose=1,
+            backend="sklearn", block_size=.5, n_blocks=2)
         artifacts.model_ = model
         # model.from_niigz("sodl_ibc_bold_100.nii.gz")
         artifacts.start_clock()

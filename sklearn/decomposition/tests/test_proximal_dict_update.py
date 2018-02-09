@@ -34,4 +34,4 @@ def test_sklearn_update_dict():
                             random_state=0)
                         _update_dict(W2.T, cov_.T, gram_.T, random_state=0,
                                      updater=updater)
-                    assert_array_almost_equal(W1, W2)
+                        assert_array_almost_equal(W1, W2)

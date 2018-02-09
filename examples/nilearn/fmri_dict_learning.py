@@ -26,11 +26,12 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
                  low_pass=None, high_pass=None, t_r=None, target_affine=None,
                  target_shape=None, mask_strategy='epi', mask_args=None,
                  memory=Memory(cachedir=None), memory_level=0, n_jobs=1,
-                 dict_penalty_model=L11_PENALTY, positive=True, batch_size=20,
+                 dict_penalty_model=L11_PENALTY, fit_algorithm=None,
+                 transform_algorithm=None, positive=True, batch_size=20,
                  n_epochs=1, reduction_ratio=1., reduction_factor=1,
-                 dict_init=None, alpha=1., dict_alpha=1., fit_algorithm="lars",
-                 transform_algorithm=None, rescale_atoms=False, callback=None,
-                 learning_curve_nticks=5, verbose=0):
+                 dict_init=None, alpha=1., dict_alpha=1., rescale_atoms=False,
+                 callback=None, learning_curve_nticks=5, backend="sklearn",
+                 block_size=1., n_blocks=1, verbose=0):
         fMRIMiniBatchDictionaryLearning.__init__(
             self, n_components=n_components, random_state=random_state,
             mask=mask, smoothing_fwhm=smoothing_fwhm, standardize=standardize,
@@ -40,6 +41,10 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
             memory_level=memory_level, n_jobs=n_jobs, batch_size=batch_size,
             reduction_ratio=reduction_ratio, dict_init=dict_init,
             alpha=alpha, n_epochs=n_epochs, verbose=verbose)
+        self.backend = backend
+        self.block_size = block_size
+        self.n_blocks = n_blocks
+        self.reduction_factor = reduction_factor
         self.dict_penalty_model = dict_penalty_model
         self.dict_alpha = dict_alpha
         self.positive = positive
@@ -48,7 +53,6 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
         self.rescale_atoms = rescale_atoms
         self.callback = callback
         self.learning_curve_nticks = learning_curve_nticks
-        self.reduction_factor = reduction_factor
 
     def _load_data(self, data, confounds=None, ensure_2d=False):
         if isinstance(data[0], np.ndarray):
@@ -71,16 +75,29 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
         dico_extra_params = {}
         updater = partial(_general_update_dict, reg=self.dict_alpha,
                           penalty_model=self.dict_penalty_model,
-                          positive=self.positive)
+                          positive=self.positive, block_size=self.block_size,
+                          n_blocks=self.n_blocks)
         for param in ["transform_algorithm"]:
             if hasattr(self, param) and getattr(self, param) is not None:
                 dico_extra_params[param] = getattr(self, param)
         if not hasattr(self, "dico_"):  # warm-start maybe
-            self.dico_ = MiniBatchDictionaryLearning(
-                n_components=self.n_components, random_state=self.random_state,
-                verbose=self.verbose, updater=updater, ensure_nonzero=True,
-                fit_algorithm=self.fit_algorithm, dict_init=self.dict_init,
-                n_jobs=self.n_jobs, n_iter=1, **dico_extra_params)
+            if self.backend == "sklearn":
+                self.dico_ = MiniBatchDictionaryLearning(
+                    n_components=self.n_components, updater=updater,
+                    random_state=self.random_state, verbose=self.verbose,
+                    ensure_nonzero=True, fit_algorithm=self.fit_algorithm,
+                    dict_init=self.dict_init, n_jobs=self.n_jobs, n_iter=1,
+                    **dico_extra_params)
+            elif self.backend == "modl":
+                from modl.decomposition.dict_fact import DictFact
+                self.dico_ = DictFact(
+                    n_components=self.n_components, code_alpha=1.,
+                    random_state=self.random_state, verbose=0,
+                    n_epochs=self.n_epochs, code_l1_ratio=0.,
+                    dict_init=self.dict_init)
+                self.dico_.n_iter_ = 0
+            else:
+                raise NotImplementedError(self.backend)
 
     def from_niigz(self, components_img, imgs=None):
         self._prefit(imgs=imgs)
@@ -136,7 +153,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
                         'Epoch %02i/%02i record %02i/%02i batch %02i/%02i' % (
                             epoch + 1, self.n_epochs, s + 1, n_records, b + 1,
                             n_iter))
-                    data_batch = self._load_data(record_data[batch])
+                    data_batch = self._load_data(record_data[batch])[:, :1000]
                     self.dico_.partial_fit(data_batch)
 
                     # invoke user-supplied callback
