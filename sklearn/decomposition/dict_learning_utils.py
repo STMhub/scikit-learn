@@ -1,7 +1,8 @@
 import numpy as np
 from joblib import Parallel, delayed
-from sklearn.utils import check_random_state, resample
+from sklearn.utils import check_random_state, resample, gen_batches
 from sklearn.linear_model.coordescendant import L2_CONSTRAINT, coordescendant
+from loky import get_reusable_executor
 
 
 def _general_update_dict(dictionary, B, A, precomputed=True,
@@ -23,32 +24,32 @@ def _general_update_dict(dictionary, B, A, precomputed=True,
         blocks = np.asarray(blocks)
 
         # run coordinate-descent on each block of components
-        with Parallel(n_jobs=n_jobs) as parallel:
-            dicos = parallel(delayed(_general_update_dict)(
-                dictionary[:, block], B[:, block] if precomputed else B,
-                A[block][:, block] if precomputed else A[:, block], reg=reg,
-                l2_reg=l2_reg, precomputed=precomputed, solver=solver,
-                penalty_model=penalty_model, max_iter=max_iter,
-                positive=positive, emulate_sklearn=emulate_sklearn,
-                random_state=random_state, random=random) for block in blocks)
+        executor = get_reusable_executor(max_workers=n_jobs)
+        dicos = executor.map(lambda block: _general_update_dict(
+            dictionary[:, block], B[:, block] if precomputed else B,
+            A[block][:, block] if precomputed else A[:, block], reg=reg,
+            l2_reg=l2_reg, precomputed=precomputed, solver=solver,
+            penalty_model=penalty_model, max_iter=max_iter,
+            positive=positive, emulate_sklearn=emulate_sklearn,
+            random_state=random_state, random=random), blocks)
 
-            # gather results
-            old_dictionary = dictionary.copy()
-            dictionary = np.zeros_like(dictionary)
-            for block, dico in zip(blocks, dicos):
-                dictionary[:, block] += dico
-            for k, cnt in zip(*np.unique(blocks, return_counts=True)):
-                # cnt is the number of blocks which containing atom number k
-                if cnt > 1:
-                    dictionary[:, k] /= cnt
+        # gather results
+        old_dictionary = dictionary.copy()
+        dictionary = np.zeros_like(dictionary)
+        for block, dico in zip(blocks, dicos):
+            dictionary[:, block] += dico
+        for k, cnt in zip(*np.unique(blocks, return_counts=True)):
+            # cnt is the number of blocks which containing atom number k
+            if cnt > 1:
+                dictionary[:, k] /= cnt
 
-                    # don't forget the good-old-times just yet
-                    if lr < 1.:
-                        dictionary[:, k] *= lr
-                        dictionary[:, k] += (1. - lr) * old_dictionary[:, k]
-                else:
-                    # atom k was never picked, restore old value
-                    dictionary[:, k] = old_dictionary[:, k]
+                # don't forget the good-old-times just yet
+                if lr < 1.:
+                    dictionary[:, k] *= lr
+                    dictionary[:, k] += (1. - lr) * old_dictionary[:, k]
+            else:
+                # atom k was never picked, restore old value
+                dictionary[:, k] = old_dictionary[:, k]
 
         return dictionary
     else:

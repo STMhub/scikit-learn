@@ -190,7 +190,7 @@ if __name__ == "__main__":
             n_epochs=n_epochs,  # callback=artifacts.callback,
             n_jobs=n_jobs, reduction_factor=reduction_factor,
             batch_size=batch_size, dict_alpha=dict_alpha, verbose=1,
-            backend="sklearn", block_size=.5, n_blocks=2)
+            backend="sklearn", block_size=.1, n_blocks=3)
         artifacts.model_ = model
         # model.from_niigz("sodl_ibc_bold_100.nii.gz")
         artifacts.start_clock()
