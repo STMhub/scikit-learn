@@ -41,9 +41,9 @@ batch_size = 50
 bcd_n_iter = 1
 n_epochs = 1
 dict_alpha = 100.
-dataset = os.environ.get("DATASET", "HCP rest")
+dataset = os.environ.get("DATASET", "IBC bold")
 n_jobs = os.environ.get("N_JOBS", None)
-penalties = ["L1", "social", "Graph-Net"]
+penalties = ["L1"]
 n_jobs = 1
 if n_jobs is None:
     if "parietal" in os.environ["HOME"]:
@@ -60,7 +60,7 @@ if dataset == "IBC bold":
 if dataset == "HCP rest":
     n_components = 100
     batch_size = 200
-    # reduction_factor = 6
+    reduction_factor = 6
     penalties = ["L1"]
 
 
@@ -75,7 +75,7 @@ def get_data(dataset):
             train_size = .95
         mask_img = os.path.join(data_dir, hcp_distro, "mask_img.nii.gz")
         zmaps = fetch_hcp_task(os.path.join(data_dir, hcp_distro))
-        X = zmaps.groupby(
+        X = zmaps[zmaps.contrast_name == "STORY-MATH"].groupby(
             "subject_id")["zmap"].apply(list).tolist()
     elif dataset == "HCP rest":
         rs_filenames, _, mask_img = load_hcp_rest(
@@ -190,7 +190,7 @@ if __name__ == "__main__":
             n_epochs=n_epochs,  # callback=artifacts.callback,
             n_jobs=n_jobs, reduction_factor=reduction_factor,
             batch_size=batch_size, dict_alpha=dict_alpha, verbose=1,
-            backend="sklearn", block_size=.1, n_blocks=3)
+            backend="sklearn", feature_sampling_rate=.1)
         artifacts.model_ = model
         # model.from_niigz("sodl_ibc_bold_100.nii.gz")
         artifacts.start_clock()
@@ -280,7 +280,8 @@ def plot_results(scores_df, timing_df=None, output_dir="unknown_dataset",
             print(out_file)
 
 
-def plot_dico(model, tag="L1", display_mode="yz", close_figs=False):
+def plot_dico(model, tag="L1", display_mode="yz", output_dir=".",
+              close_figs=False):
     import matplotlib.pyplot as plt
     from nilearn.plotting import plot_stat_map
     from nilearn.image.image import iter_img

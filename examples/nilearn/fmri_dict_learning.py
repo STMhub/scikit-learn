@@ -31,7 +31,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
                  n_epochs=1, reduction_ratio=1., reduction_factor=1,
                  dict_init=None, alpha=1., dict_alpha=1., rescale_atoms=False,
                  callback=None, learning_curve_nticks=5, backend="sklearn",
-                 block_size=1., n_blocks=1, verbose=0):
+                 feature_sampling_rate=1., verbose=0):
         fMRIMiniBatchDictionaryLearning.__init__(
             self, n_components=n_components, random_state=random_state,
             mask=mask, smoothing_fwhm=smoothing_fwhm, standardize=standardize,
@@ -42,8 +42,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
             reduction_ratio=reduction_ratio, dict_init=dict_init,
             alpha=alpha, n_epochs=n_epochs, verbose=verbose)
         self.backend = backend
-        self.block_size = block_size
-        self.n_blocks = n_blocks
+        self.feature_sampling_rate = feature_sampling_rate
         self.reduction_factor = reduction_factor
         self.dict_penalty_model = dict_penalty_model
         self.dict_alpha = dict_alpha
@@ -75,8 +74,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
         dico_extra_params = {}
         updater = partial(_general_update_dict, reg=self.dict_alpha,
                           penalty_model=self.dict_penalty_model,
-                          positive=self.positive, block_size=self.block_size,
-                          n_blocks=self.n_blocks)
+                          positive=self.positive)
         for param in ["transform_algorithm"]:
             if hasattr(self, param) and getattr(self, param) is not None:
                 dico_extra_params[param] = getattr(self, param)
@@ -87,6 +85,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
                     random_state=self.random_state, verbose=self.verbose,
                     ensure_nonzero=True, fit_algorithm=self.fit_algorithm,
                     dict_init=self.dict_init, n_jobs=self.n_jobs, n_iter=1,
+                    feature_sampling_rate=self.feature_sampling_rate,
                     **dico_extra_params)
             elif self.backend == "modl":
                 from modl.decomposition.dict_fact import DictFact
@@ -153,7 +152,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
                         'Epoch %02i/%02i record %02i/%02i batch %02i/%02i' % (
                             epoch + 1, self.n_epochs, s + 1, n_records, b + 1,
                             n_iter))
-                    data_batch = self._load_data(record_data[batch])[:, :1000]
+                    data_batch = self._load_data(record_data[batch])
                     self.dico_.partial_fit(data_batch)
 
                     # invoke user-supplied callback

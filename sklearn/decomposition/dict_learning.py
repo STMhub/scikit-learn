@@ -18,7 +18,7 @@ from ..base import BaseEstimator, TransformerMixin
 from ..externals.joblib import Parallel, delayed, cpu_count
 from ..externals.six.moves import zip
 from ..utils import (check_array, check_random_state, gen_even_slices,
-                     gen_batches, _get_n_jobs)
+                     gen_batches, _get_n_jobs, resample)
 from ..utils.extmath import randomized_svd, row_norms
 from ..utils.validation import check_is_fitted
 from ..linear_model import Lasso, orthogonal_mp_gram, LassoLars, Lars, Ridge
@@ -390,7 +390,8 @@ def _update_dict(dictionary, Y, code, verbose=False, return_r2=False,
     else:
         # update via home-brewed technology
         dictionary = updater(dictionary, Y, code, precomputed=precomputed,
-                             n_jobs=n_jobs, verbose=verbose)
+                             n_jobs=n_jobs, verbose=verbose,
+                             random_state=random_state)
 
         # handle dead atoms
         if ensure_nonzero:
@@ -606,7 +607,7 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
                          method='lars', iter_offset=0, random_state=None,
                          return_inner_stats=False, inner_stats=None,
                          return_n_iter=False, updater=None,
-                         ensure_nonzero=True):
+                         feature_sampling_rate=1., ensure_nonzero=True):
     """Solves a dictionary learning matrix factorization problem online.
 
     Finds the best dictionary and the corresponding sparse code for
@@ -768,9 +769,10 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
         A = inner_stats[0].copy()
         B = inner_stats[1].copy()
 
+    feature_mask_size = int(np.ceil(feature_sampling_rate * n_features))
+    feature_mask = slice(0, n_features)
     # If n_iter is zero, we need to return zero.
     ii = iter_offset - 1
-
     for ii, batch in zip(range(iter_offset, iter_offset + n_iter), batches):
         this_X = X_train[batch]
         dt = (time.time() - t0)
@@ -782,8 +784,15 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
                 print("Iteration % 3i (elapsed time: % 3is, % 4.1fmn)"
                       % (ii, dt, dt / 60))
 
-        this_code = sparse_encode(this_X, dictionary.T, algorithm=method,
-                                  alpha=alpha, n_jobs=n_jobs).T
+        # resample feature space
+        if feature_mask_size < n_features:
+            feature_mask = random_state.choice(range(n_features),
+                                               feature_mask_size,
+                                               replace=False)
+        this_code = sparse_encode(this_X[:, feature_mask],
+                                  dictionary[feature_mask].T,
+                                  algorithm=method, alpha=alpha,
+                                  n_jobs=n_jobs).T
 
         # Update the auxiliary variables
         if ii < batch_size - 1:
@@ -794,14 +803,15 @@ def dict_learning_online(X, n_components=2, alpha=1, n_iter=100,
 
         A *= beta
         A += np.dot(this_code, this_code.T)
-        B *= beta
-        B += np.dot(this_X.T, this_code.T)
+        B[feature_mask] *= beta
+        B[feature_mask] += np.dot(this_X[:, feature_mask].T, this_code.T)
 
         # Update dictionary
-        dictionary = _update_dict(
-            dictionary, B, A, verbose=verbose, random_state=random_state,
-            updater=updater, precomputed=True, ensure_nonzero=ensure_nonzero,
-            n_jobs=n_jobs)
+        dictionary[feature_mask] = _update_dict(
+            dictionary[feature_mask], B[feature_mask], A, verbose=verbose,
+            random_state=random_state, updater=updater, precomputed=True,
+            ensure_nonzero=ensure_nonzero, n_jobs=n_jobs)
+
         # XXX: Can the residuals be of any use?
 
         # Maybe we need a stopping criteria based on the amount of
@@ -1281,7 +1291,7 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
                  shuffle=True, dict_init=None, transform_algorithm='omp',
                  transform_n_nonzero_coefs=None, transform_alpha=None,
                  verbose=False, split_sign=False, random_state=None,
-                 updater=None, ensure_nonzero=True):
+                 updater=None, feature_sampling_rate=1, ensure_nonzero=True):
 
         self._set_sparse_coding_params(n_components, transform_algorithm,
                                        transform_n_nonzero_coefs,
@@ -1296,6 +1306,7 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
         self.split_sign = split_sign
         self.random_state = random_state
         self.updater = updater
+        self.feature_sampling_rate = feature_sampling_rate
         self.ensure_nonzero = ensure_nonzero
 
     def fit(self, X, y=None):
@@ -1325,7 +1336,8 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
             batch_size=self.batch_size, shuffle=self.shuffle,
             verbose=self.verbose, random_state=random_state,
             return_inner_stats=True, return_n_iter=True,
-            updater=self.updater, ensure_nonzero=self.ensure_nonzero)
+            updater=self.updater, ensure_nonzero=self.ensure_nonzero,
+            feature_sampling_rate=self.feature_sampling_rate)
         self.components_ = U
         # Keep track of the state of the algorithm to be able to do
         # some online fitting (partial_fit)
@@ -1370,6 +1382,7 @@ class MiniBatchDictionaryLearning(BaseEstimator, SparseCodingMixin):
             n_iter=self.n_iter, method=self.fit_algorithm,
             n_jobs=self.n_jobs, dict_init=dict_init,
             batch_size=len(X), shuffle=False,
+            feature_sampling_rate=self.feature_sampling_rate,
             verbose=self.verbose, return_code=False,
             iter_offset=iter_offset, random_state=self.random_state_,
             return_inner_stats=True, inner_stats=inner_stats,
