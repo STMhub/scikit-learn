@@ -31,6 +31,29 @@ def bundle_up(X, batch_size):
         tmp.append(remainder)
     return tmp
 
+
+def str_backprojection(model, Xs, alpha=1e-4, out_file=None):
+    from scipy import linalg
+    Xs = load_imgs(Xs)
+    dtype = Xs[0].dtype
+    n_components = len(model.components_)
+    n_features = Xs[0].shape[1]
+    gram = np.zeros((n_components, n_components), dtype=dtype)
+    cov = np.zeros((n_components, n_features), dtype=dtype)
+    for xs in Xs:
+        code = model.transform(xs)
+        gram += np.dot(code.T, code)
+        cov += np.dot(code.T, xs)
+    if alpha > 0.:
+        np.fill_diagonal(gram, np.diag(gram) + alpha)
+    dico = np.dot(linalg.inv(gram), cov)
+    if out_file is not None:
+        np.save(out_file, dico)
+        print(out_file)
+        return out_file
+    return dico
+
+
 output_dir = os.path.abspath(os.environ.get("OUTPUT_DIR", "."))
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
@@ -41,7 +64,7 @@ batch_size = 50
 bcd_n_iter = 1
 n_epochs = 10
 dict_alpha = 100.
-dataset = os.environ.get("DATASET", "HCP rest")
+dataset = os.environ.get("DATASET", "IBC bold")
 n_jobs = os.environ.get("N_JOBS", None)
 penalties = ["L1"]
 n_jobs = 1
@@ -69,6 +92,7 @@ def get_data(dataset):
         train_size = .75
     else:
         train_size = None
+    dico_out_files = dico_out_files_test = dico_out_files_train = None
     misc = {}
     if dataset == "HCP zmaps":
         if benchmark:
@@ -99,23 +123,33 @@ def get_data(dataset):
     elif dataset == "IBC bold":
         mask_img = os.path.join(root, "storage/store/data/ibc/derivatives/group",
                                 "mask.nii.gz")
-        X = glob.glob(os.path.join(root, "storage/store/data/ibc/derivatives",
-                                   "sub-*/ses-*/func/wrdcsub-*_bold.npy"))
-        X = load_imgs(X)
+        X = []
+        dico_out_files = []
+        for subject_dir in glob.glob(
+                os.path.join(root, "storage/store/data/ibc/derivatives",
+                             "sub-11")):
+            subject_id = os.path.basename(subject_dir)
+            Xs = glob.glob(os.path.join(subject_dir,
+                                        "ses-??/func/wrdcsub-*_bold.npy"))
+            X.append(Xs)
+            output_dir = os.path.join(os.path.dirname(subject_dir), "dicos")
+            subject_output_dir = os.path.join(output_dir, subject_id)
+            if not os.path.exists(subject_output_dir):
+                os.makedirs(subject_output_dir)
+            dico_out_file = os.path.join(subject_output_dir, "dico.npy")
+            dico_out_files.append(dico_out_file)
     else:
         raise NotImplementedError(dataset)
     mask_img = check_niimg(mask_img)
     if train_size is None:
         X_train, X_test = X, []
+        dico_out_files_train, dico_out_files_test = dico_out_files, []
     else:
         X_train, X_test = train_test_split(X, train_size=train_size)
-    return X_train, X_test, mask_img, misc
-
-
-X_train, X_test, mask_img, misc = get_data(dataset)
-n_subjects = len(X_train)
-if "zmaps" in dataset:
-    X_train = bundle_up(X_train, batch_size)
+        if dico_out_files is not None:
+            dico_out_files_train, dico_out_files_test = train_test_split(
+                dico_out_files, train_size=train_size)
+    return X_train, X_test, mask_img, dico_out_files_train, dico_out_files_test
 
 
 class Artifacts(object):
@@ -162,6 +196,13 @@ class Artifacts(object):
             self.scores_[scorer].append(record_scores[scorer])
 
 if __name__ == "__main__":
+    (X_train, X_test, mask_img, dico_out_files_train,
+     dico_out_files_test) = get_data(dataset)
+    n_subjects = len(X_train)
+    if "zmaps" in dataset:
+        X_train = bundle_up(X_train, batch_size)
+
+
     coder = partial(_enet_coder, l1_ratio=0., alpha=1.)
     graphnet_prox = ProximalOperator(which="graph-net", affine=mask_img.affine,
                                      mask=mask_img.get_data().astype(bool),
@@ -192,16 +233,21 @@ if __name__ == "__main__":
             batch_size=batch_size, dict_alpha=dict_alpha, verbose=1,
             backend="sklearn", feature_sampling_rate=.1)
         artifacts.model_ = model
-        # model.from_niigz("sodl_ibc_bold_100.nii.gz")
+        model.from_niigz("L1_IBC_bold.nii.gz")
         artifacts.start_clock()
-        model.fit(X_train)
+        # model.fit(X_train)
         all_artifacts.append(artifacts)
-        components_img = unmask(model.components_, mask_img)
-        dico_out_file = os.path.join(
-            output_dir, "%s_%s.nii.gz" % (penalty, dataset.replace(" ", "_")))
-        components_img.to_filename(dico_out_file)
-        print(dico_out_file)
+        # components_img = unmask(model.components_, mask_img)
+        # dico_out_file = os.path.join(
+        #     output_dir, "%s_%s.nii.gz" % (penalty, dataset.replace(" ", "_")))
+        # components_img.to_filename(dico_out_file)
+        # print(dico_out_file)
 
+    if dico_out_files_train is not None:
+        print("Back-projecting group dictionary into subject spaces")
+        Parallel(n_jobs=n_jobs)(delayed(str_backprojection)(
+            model, Xs, out_file=dico_out_file) for Xs, dico_out_file in zip(
+                X_train, dico_out_files_train))
 
 def create_results_df():
     import pandas as pd
