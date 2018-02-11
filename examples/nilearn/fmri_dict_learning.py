@@ -40,7 +40,8 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
             mask_strategy=mask_strategy, mask_args=mask_args, memory=memory,
             memory_level=memory_level, n_jobs=n_jobs, batch_size=batch_size,
             reduction_ratio=reduction_ratio, dict_init=dict_init,
-            alpha=alpha, n_epochs=n_epochs, verbose=verbose)
+            alpha=alpha, n_epochs=n_epochs)
+        self.verbose = verbose
         self.backend = backend
         self.feature_sampling_rate = feature_sampling_rate
         self.reduction_factor = reduction_factor
@@ -71,6 +72,7 @@ class ProximalfMRIMiniBatchDictionaryLearning(fMRIMiniBatchDictionaryLearning):
     def _prefit(self, imgs=None):
         if imgs is not None:
             BaseDecomposition.fit(self, imgs)
+            self.masker_.verbose = 0
         dico_extra_params = {}
         updater = partial(_general_update_dict, reg=self.dict_alpha,
                           penalty_model=self.dict_penalty_model,

@@ -39,9 +39,9 @@ random_state = 42
 n_components = 40
 batch_size = 50
 bcd_n_iter = 1
-n_epochs = 1
+n_epochs = 10
 dict_alpha = 100.
-dataset = os.environ.get("DATASET", "IBC bold")
+dataset = os.environ.get("DATASET", "HCP rest")
 n_jobs = os.environ.get("N_JOBS", None)
 penalties = ["L1"]
 n_jobs = 1
@@ -75,7 +75,7 @@ def get_data(dataset):
             train_size = .95
         mask_img = os.path.join(data_dir, hcp_distro, "mask_img.nii.gz")
         zmaps = fetch_hcp_task(os.path.join(data_dir, hcp_distro))
-        X = zmaps[zmaps.contrast_name == "STORY-MATH"].groupby(
+        X = zmaps.groupby(
             "subject_id")["zmap"].apply(list).tolist()
     elif dataset == "HCP rest":
         rs_filenames, _, mask_img = load_hcp_rest(
@@ -88,14 +88,14 @@ def get_data(dataset):
         if benchmark:
             train_size = .8
     elif dataset == "IBC zmaps":
+        mask_img = os.path.join(root, "storage/store/data/ibc/derivatives/group",
+                                "mask.nii.gz")
         zmap_file_pattern = os.path.join(root,
                                          "storage/store/data/ibc",
                                          "derivatives/sub-*/ses-*",
                                          "res_stats_hcp_*_ffx",
                                          "stat_maps/*.nii.gz")
-        X = sorted(glob.glob(zmap_file_pattern))
-        mask_img = os.path.join(root, "storage/store/data/ibc/derivatives/group",
-                                "mask.nii.gz")
+        X = [sorted(glob.glob(zmap_file_pattern))]
     elif dataset == "IBC bold":
         mask_img = os.path.join(root, "storage/store/data/ibc/derivatives/group",
                                 "mask.nii.gz")
